@@ -86,7 +86,7 @@ def send_new_task_emails(request, task):
 	user_office_email = get_customization('user_office_email_address')
 	message = get_media_file_contents('new_task_email.html')
 	if user_office_email and message:
-		users = User.objects.filter(qualifications__id=task.tool.id, is_staff=False)
+		users = User.objects.filter(qualifications__id=task.tool.id, is_staff=False, is_active=True)
 		dictionary = {
 			'template_color': bootstrap_primary_color('danger') if task.force_shutdown else bootstrap_primary_color('warning'),
 			'user': request.user,
@@ -98,16 +98,68 @@ def send_new_task_emails(request, task):
 		subject = task.tool.name + (' shutdown' if task.force_shutdown else ' problem')
 		users = [x.email for x in users]
 		rendered_message = Template(message).render(Context(dictionary))
-		try:
-			email = EmailMultiAlternatives(subject, from_email=user_office_email, bcc=set(users))
-			email.attach_alternative(rendered_message, 'text/html')
-			email.send()
-		except SMTPException as e:
-			dictionary = {
-				'title': 'Email not sent',
-				'heading': 'There was a problem sending your email',
-				'content': 'NEMO was unable to send the email through the email server. The error message that NEMO received is: ' + str(e),
-			}
+		#try:
+		email = EmailMultiAlternatives(subject, from_email=user_office_email, bcc=set(users))
+		email.attach_alternative(rendered_message, 'text/html')
+		email.send()
+		#except SMTPException as e:
+		#	dictionary = {
+		#		'title': 'Email not sent',
+		#		'heading': 'There was a problem sending your email',
+		#		'content': 'NEMO was unable to send the email through the email server. The error message that NEMO received is: ' + str(e),
+		#	}
+
+def send_task_update_emails(request, task):
+	message = get_media_file_contents('generic_email.html')
+	user_office_email = get_customization('user_office_email_address')
+	if message and user_office_email:
+		task.refresh_from_db()
+		if not task.tool.problematic():
+			tool_status = 'up'
+		elif task.tool.operational:
+			tool_status = 'in problem status'
+		else:
+			tool_status = 'down'
+		if task.resolved:
+			subject = f'{task.tool} Issue Resolved'
+			task_user = task.resolver
+		elif task.cancelled:
+			subject = f'{task.tool} Issue Cancelled'
+			task_user = task.resolver
+		else:
+			subject = f'{task.tool} Update'
+			task_user = task.last_updated_by
+		messagebody = f"""
+	The status of the {task.tool} was just modified by {task_user}.
+	You can see the full status description here: {request.build_absolute_uri(task.tool.get_absolute_url())}.
+
+	{task.tool} is currently {tool_status}.
+	"""
+	if task.resolved:
+		messagebody += f"""
+	Resolution description:
+	{task.resolution_description}
+	"""
+	dictionary = {
+		'template_color': bootstrap_primary_color('success') if tool_status == 'up' else bootstrap_primary_color('warning'),
+		'title': subject,
+		'greeting': f'{task.tool} Users,',
+		'contents': messagebody
+	}
+	users = User.objects.filter(qualifications__id=task.tool.id, is_active=True)
+	users = [x.email for x in users]
+	rendered_message = Template(message).render(Context(dictionary))
+	try:
+		email = EmailMultiAlternatives(subject, from_email=user_office_email, bcc=set(users))
+		email.attach_alternative(rendered_message, 'text/html')
+		email.send()
+	except SMTPException as e:
+		dictionary = {
+			'title': 'Email not sent',
+			'heading': 'There was a problem sending your email',
+			'content': 'NEMO was unable to send the email through the email server. The error message that NEMO received is: ' + str(e),
+		}
+
 
 @login_required
 @require_POST
@@ -132,6 +184,7 @@ def cancel(request, task_id):
 	task.resolution_time = timezone.now()
 	task.save()
 	determine_tool_status(task.tool)
+	send_task_update_emails(request, task)
 	return redirect('tool_control')
 
 
@@ -181,6 +234,7 @@ def update(request, task_id):
 	form.save()
 	set_task_status(request, task, request.POST.get('status'), request.user)
 	determine_tool_status(task.tool)
+	send_task_update_emails(request, task)
 	try:
 		micromanage(task, request.build_absolute_uri(task.tool.get_absolute_url()))
 	except:

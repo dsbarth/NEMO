@@ -2,12 +2,15 @@ from _ssl import PROTOCOL_TLSv1_2, CERT_REQUIRED
 from base64 import b64decode
 from logging import exception
 
+import datetime
+
 from django.conf import settings
 from django.contrib.auth import authenticate, login, REDIRECT_FIELD_NAME, logout
 from django.contrib.auth.backends import RemoteUserBackend, ModelBackend
 from django.http import HttpResponseRedirect
 from django.shortcuts import render
 from django.urls import reverse, resolve
+from django.utils import timezone
 from django.utils.decorators import method_decorator
 from django.views.decorators.debug import sensitive_post_parameters
 from django.views.decorators.http import require_http_methods, require_GET, logger
@@ -137,6 +140,10 @@ def login_user(request):
 			resolve(next_page)  # Make sure the next page is a legitimate URL for NEMO
 		except:
 			next_page = reverse('landing')
+		if user.access_expiration:
+			if user.access_expiration < timezone.now().date():
+				user.training_required = True
+				user.save()
 		return HttpResponseRedirect(next_page)
 	dictionary['user_name_or_password_incorrect'] = True
 	return render(request, 'login.html', dictionary)

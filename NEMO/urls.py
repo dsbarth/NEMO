@@ -26,6 +26,9 @@ router.register(r'tasks', api.TaskViewSet)
 router.register(r'scheduled_outages', api.ScheduledOutageViewSet)
 router.register(r'interlocks', api.InterlockViewSet)
 router.register(r'stockroom_withdraws', api.StockroomWithdrawViewSet)
+router.register(r'stockroom_items', api.StockroomItemsViewSet)
+router.register(r'sensors', api.SensorViewSet)
+router.register(r'user_chemicals', api.UserChemicalViewSet)
 
 urlpatterns = [
 	# Authentication & error pages:

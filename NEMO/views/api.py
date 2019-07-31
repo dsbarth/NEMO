@@ -1,8 +1,8 @@
 from rest_framework.viewsets import ReadOnlyModelViewSet
 
 from NEMO.filters import ReservationFilter, UsageEventFilter, AreaAccessRecordFilter, UserFilter
-from NEMO.models import User, Project, Account, Reservation, UsageEvent, AreaAccessRecord, Task, ScheduledOutage, Tool, Interlock, StockroomWithdraw
-from NEMO.serializers import UserSerializer, ProjectSerializer, AccountSerializer, ReservationSerializer, UsageEventSerializer, AreaAccessRecordSerializer, TaskSerializer, ScheduledOutageSerializer, ToolSerializer, InterlockSerializer, StockroomWithdrawSerializer
+from NEMO.models import User, Project, Account, Reservation, UsageEvent, AreaAccessRecord, Task, ScheduledOutage, Tool, Interlock, Sensor, StockroomWithdraw, StockroomItem, UserChemical
+from NEMO.serializers import UserSerializer, ProjectSerializer, AccountSerializer, ReservationSerializer, UsageEventSerializer, AreaAccessRecordSerializer, TaskSerializer, ScheduledOutageSerializer, SensorSerializer, ToolSerializer, InterlockSerializer, StockroomWithdrawSerializer, StockroomItemSerializer, UserChemicalSerializer
 
 
 class UserViewSet(ReadOnlyModelViewSet):
@@ -58,6 +58,22 @@ class InterlockViewSet(ReadOnlyModelViewSet):
 	queryset = Interlock.objects.all()
 	serializer_class = InterlockSerializer
 
+
 class StockroomWithdrawViewSet(ReadOnlyModelViewSet):
 	queryset = StockroomWithdraw.objects.all()
 	serializer_class = StockroomWithdrawSerializer
+
+
+class StockroomItemsViewSet(ReadOnlyModelViewSet):
+	queryset = StockroomItem.objects.all()
+	serializer_class = StockroomItemSerializer
+
+
+class SensorViewSet(ReadOnlyModelViewSet):
+	queryset = Sensor.objects.all()
+	serializer_class = SensorSerializer
+
+
+class UserChemicalViewSet(ReadOnlyModelViewSet):
+	queryset = UserChemical.objects.all()
+	serializer_class = UserChemicalSerializer

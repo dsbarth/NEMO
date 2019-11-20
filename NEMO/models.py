@@ -2,6 +2,8 @@ import datetime
 import socket
 import struct
 import pytz
+
+from time import sleep
 from datetime import timedelta
 from logging import getLogger
 from pymodbus3.client.sync import ModbusTcpClient
@@ -742,6 +744,7 @@ class Interlock(models.Model):
 			client = ModbusTcpClient(self.card.server)
 			client.connect()
 			client.write_coil(self.channel, command_type, unit=1)
+			sleep(0.3)
 			reply = client.read_coils(self.channel, 1, unit=1)
 
 			# Update the state of the interlock in the database if the command succeeded.

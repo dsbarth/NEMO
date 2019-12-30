@@ -5,12 +5,13 @@ from django.contrib.admin.widgets import FilteredSelectMultiple
 from django.contrib.auth.models import Permission
 
 from NEMO.actions import lock_selected_interlocks, synchronize_with_tool_usage, unlock_selected_interlocks
+from NEMO.forms import InterlockCardForm
 from NEMO.models import Account, ActivityHistory, Alert, Area, AreaAccessRecord, ChemicalRequest, Comment, Configuration, \
 	ConfigurationHistory, Consumable, ConsumableCategory, ConsumableWithdraw, ContactInformation, \
 	ContactInformationCategory, Customization, Door, Interlock, InterlockCard, LandingPageChoice, MembershipHistory, \
 	News, Notification, PhysicalAccessLevel, PhysicalAccessLog, Project, Reservation, Resource, ResourceCategory, \
 	SafetyIssue, ScheduledOutage, ScheduledOutageCategory, Sensor, StockroomItem, StockroomWithdraw, StockroomCategory, StaffCharge, Task, TaskCategory, TaskHistory, TaskStatus, \
-	Tool, TrainingSession, UsageEvent, User, UserChemical, UserType, UserPreferences, TaskImages
+	Tool, TrainingSession, UsageEvent, User, UserChemical, UserType, UserPreferences, TaskImages, InterlockCardCategory
 
 admin.site.site_header = "NEMO"
 admin.site.site_title = "NEMO"
@@ -343,7 +344,8 @@ class StockroomWithdrawAdmin(admin.ModelAdmin):
 
 @register(InterlockCard)
 class InterlockCardAdmin(admin.ModelAdmin):
-	list_display = ('server', 'port', 'number', 'even_port', 'odd_port')
+	form = InterlockCardForm
+	list_display = ('server', 'port', 'number', 'category', 'even_port', 'odd_port')
 
 
 @register(Interlock)
@@ -351,6 +353,11 @@ class InterlockAdmin(admin.ModelAdmin):
 	list_display = ('id', 'card', 'channel', 'state', 'tool', 'door')
 	actions = [lock_selected_interlocks, unlock_selected_interlocks, synchronize_with_tool_usage]
 	readonly_fields = ['state', 'most_recent_reply']
+
+
+@register(InterlockCardCategory)
+class InterlockCardCategoryAdmin(admin.ModelAdmin):
+	list_display = ('name',)
 
 
 @register(Task)

@@ -1,14 +1,12 @@
 from datetime import timedelta
-from copy import deepcopy
 
-from django.core.mail import send_mail
 from django.db.models import Q
 from django.http import HttpResponse, HttpResponseBadRequest
 from django.template import Template, Context
 from django.utils import timezone
 
 from NEMO.models import Reservation, AreaAccessRecord, ScheduledOutage, Tool
-from NEMO.utilities import format_datetime
+from NEMO.utilities import format_datetime, send_mail
 from NEMO.views.customization import get_customization, get_media_file_contents
 
 
@@ -54,12 +52,12 @@ def check_policy_to_enable_tool(tool, operator, user, project, staff_charge):
 		message = get_media_file_contents('unauthorized_tool_access_email.html')
 		if abuse_email_address and message:
 			rendered_message = Template(message).render(Context(dictionary))
-			send_mail("Area access requirement", '', abuse_email_address, [abuse_email_address], html_message=rendered_message)
+			send_mail("Area access requirement", rendered_message, abuse_email_address, [abuse_email_address])
 		return HttpResponseBadRequest("You must be logged in to the {} to operate this tool.".format(tool.requires_area_access.name.lower()))
 
 	# Staff may only charge staff time for one user at a time.
 	if staff_charge and operator.charging_staff_time():
-		return HttpResponseBadRequest('You are already charging staff time. You must end the current staff charge before you begin another.')
+		return HttpResponseBadRequest('You are already charging staff time. You must end the current staff charge before you being another.')
 
 	# Staff may not bill staff time to the themselves.
 	if staff_charge and operator == user:
@@ -71,7 +69,7 @@ def check_policy_to_enable_tool(tool, operator, user, project, staff_charge):
 
 	# The tool operator must not have a lock on usage
 	if operator.training_required:
-		return HttpResponseBadRequest("You are blocked from using all tools in the facility. Please complete the rules tutorial in order to use tools.")
+		return HttpResponseBadRequest("You are blocked from using all tools in the NanoFab. Please complete the NanoFab rules tutorial in order to use tools.")
 
 	# Users may only use a tool when delayed logoff is not in effect. Staff are exempt from this rule.
 	if tool.delayed_logoff_in_progress() and not operator.is_staff:
@@ -95,33 +93,16 @@ def check_policy_to_enable_tool(tool, operator, user, project, staff_charge):
 		except:
 			return HttpResponseBadRequest("There was a problem enabling this tool. Please see staff.")
 
-	#Refuses login on tools that require reservations if there is no reservation
 	if tool.reservation_required and not operator.is_staff:
 		td=timedelta(minutes=15)
 		if not Reservation.objects.filter(start__lt=timezone.now()+td, end__gt=timezone.now(), cancelled=False, missed=False, shortened=False, user=operator, tool=tool).exists():
 			return HttpResponseBadRequest("A reservation is required to enable this tool.")
-		# try:
-		# 	current_reservation = Reservation.objects.filter(start__lt=timezone.now()+td, start__gt=timezone.now(), end__gt=timezone.now(), cancelled=False, missed=False, shortened=False, user=operator, tool=tool)
-		# 	# Resize the user's reservation to the current time. This is necessary because otherwise, if they log in and log out before the official start of their reservation, it will not be shortened
-		# 	new_reservation = deepcopy(current_reservation)
-		# 	new_reservation.id = None
-		# 	new_reservation.pk = None
-		# 	now=timezone.now()
-		# 	new_reservation.start=now
-		# 	new_reservation.save()
-		# 	current_reservation.cancelled = True
-		# 	current_reservation.cancellation_time = now
-		# 	current_reservation.cancelled_by = user
-		# 	current_reservation.descendant = new_reservation
-		# 	current_reservation.save()
-		# except:
-		# 	pass
+
 	return HttpResponse()
 
 
 def check_policy_to_disable_tool(tool, operator, downtime):
 	""" Check that the user is allowed to disable the tool. """
-	current_usage_event = tool.get_current_usage_event()
 	current_usage_event = tool.get_current_usage_event()
 	try:
 		current_reservation = Reservation.objects.get(start__lt=timezone.now(), end__gt=timezone.now(), cancelled=False, missed=False, shortened=False, user=operator, tool=tool)
@@ -205,7 +186,7 @@ def check_policy_to_save_reservation(cancelled_reservation, new_reservation, use
 	# Staff may break this rule.
 	# An explicit policy override allows this rule to be broken.
 	if user.training_required:
-		policy_problems.append("You are blocked from making reservations for all tools in the facility. Please complete the rules tutorial in order to create new reservations.")
+		policy_problems.append("You are blocked from making reservations for all tools in the NanoFab. Please complete the NanoFab rules tutorial in order to create new reservations.")
 
 	# Users may only change their own reservations.
 	# Staff may break this rule.
@@ -239,6 +220,18 @@ def check_policy_to_save_reservation(cancelled_reservation, new_reservation, use
 		if new_reservation.start > timezone.now() + reservation_horizon:
 			policy_problems.append("You may not create reservations further than " + str(reservation_horizon.days) + " days from now for this tool.")
 
+
+	# Check tool policy rules
+	tool_policy_problems = []
+	if new_reservation.tool.should_enforce_policy(new_reservation):
+		tool_policy_problems = check_policy_rules_for_tool(cancelled_reservation, new_reservation, user)
+
+	# Return the list of all policies that are not met.
+	return policy_problems + tool_policy_problems, overridable
+
+
+def check_policy_rules_for_tool(cancelled_reservation, new_reservation, user):
+	tool_policy_problems = []
 	# Calculate the duration of the reservation:
 	duration = new_reservation.end - new_reservation.start
 
@@ -248,7 +241,9 @@ def check_policy_to_save_reservation(cancelled_reservation, new_reservation, use
 	if new_reservation.tool.minimum_usage_block_time:
 		minimum_block_time = timedelta(minutes=new_reservation.tool.minimum_usage_block_time)
 		if duration < minimum_block_time:
-			policy_problems.append("Your reservation has a duration of " + str(int(duration.total_seconds() / 60)) + " minutes. This tool requires a minimum reservation duration of " + str(int(minimum_block_time.total_seconds() / 60)) + " minutes.")
+			tool_policy_problems.append("Your reservation has a duration of " + str(int(
+				duration.total_seconds() / 60)) + " minutes. This tool requires a minimum reservation duration of " + str(
+				int(minimum_block_time.total_seconds() / 60)) + " minutes.")
 
 	# The reservation may not exceed the maximum block time for this tool.
 	# Staff may break this rule.
@@ -256,7 +251,9 @@ def check_policy_to_save_reservation(cancelled_reservation, new_reservation, use
 	if new_reservation.tool.maximum_usage_block_time:
 		maximum_block_time = timedelta(minutes=new_reservation.tool.maximum_usage_block_time)
 		if duration > maximum_block_time:
-			policy_problems.append("Your reservation has a duration of " + str(int(duration.total_seconds() / 60)) + " minutes. Reservations for this tool may not exceed " + str(int(maximum_block_time.total_seconds() / 60)) + " minutes.")
+			tool_policy_problems.append("Your reservation has a duration of " + str(
+				int(duration.total_seconds() / 60)) + " minutes. Reservations for this tool may not exceed " + str(
+				int(maximum_block_time.total_seconds() / 60)) + " minutes.")
 
 	# If there is a limit on number of reservations per user per day then verify that the user has not exceeded it.
 	# Staff may break this rule.
@@ -265,12 +262,15 @@ def check_policy_to_save_reservation(cancelled_reservation, new_reservation, use
 		start_of_day = new_reservation.start
 		start_of_day = start_of_day.replace(hour=0, minute=0, second=0, microsecond=0)
 		end_of_day = start_of_day + timedelta(days=1)
-		reservations_for_that_day = Reservation.objects.filter(cancelled=False, shortened=False, start__gte=start_of_day, end__lte=end_of_day, user=user, tool=new_reservation.tool)
+		reservations_for_that_day = Reservation.objects.filter(cancelled=False, shortened=False,
+															   start__gte=start_of_day, end__lte=end_of_day, user=user,
+															   tool=new_reservation.tool)
 		# Exclude any reservation that is being cancelled.
 		if cancelled_reservation and cancelled_reservation.id:
 			reservations_for_that_day = reservations_for_that_day.exclude(id=cancelled_reservation.id)
 		if reservations_for_that_day.count() >= new_reservation.tool.maximum_reservations_per_day:
-			policy_problems.append("You may only have " + str(new_reservation.tool.maximum_reservations_per_day) + " reservations for this tool per day. Missed reservations are included when counting the number of reservations per day.")
+			tool_policy_problems.append("You may only have " + str(
+				new_reservation.tool.maximum_reservations_per_day) + " reservations for this tool per day. Missed reservations are included when counting the number of reservations per day.")
 
 	# A minimum amount of time between reservations for the same user & same tool can be enforced.
 	# Staff may break this rule.
@@ -278,33 +278,39 @@ def check_policy_to_save_reservation(cancelled_reservation, new_reservation, use
 	if new_reservation.tool.minimum_time_between_reservations:
 		buffer_time = timedelta(minutes=new_reservation.tool.minimum_time_between_reservations)
 		must_end_before = new_reservation.start - buffer_time
-		too_close = Reservation.objects.filter(cancelled=False, shortened=False, user=user, end__gt=must_end_before, start__lt=new_reservation.start, tool=new_reservation.tool)
+		too_close = Reservation.objects.filter(cancelled=False, shortened=False, user=user, end__gt=must_end_before,
+											   start__lt=new_reservation.start, tool=new_reservation.tool)
 		if cancelled_reservation and cancelled_reservation.id:
 			too_close = too_close.exclude(id=cancelled_reservation.id)
 		if too_close.exists():
-			policy_problems.append("Separate reservations for this tool that belong to you must be at least " + str(new_reservation.tool.minimum_time_between_reservations) + " minutes apart from each other. The proposed reservation ends too close to another reservation.")
+			tool_policy_problems.append("Separate reservations for this tool that belong to you must be at least " + str(
+				new_reservation.tool.minimum_time_between_reservations) + " minutes apart from each other. The proposed reservation ends too close to another reservation.")
 		must_start_after = new_reservation.end + buffer_time
-		too_close = Reservation.objects.filter(cancelled=False, shortened=False, user=user, start__lt=must_start_after, end__gt=new_reservation.start, tool=new_reservation.tool)
+		too_close = Reservation.objects.filter(cancelled=False, shortened=False, user=user, start__lt=must_start_after,
+											   end__gt=new_reservation.start, tool=new_reservation.tool)
 		if cancelled_reservation and cancelled_reservation.id:
 			too_close = too_close.exclude(id=cancelled_reservation.id)
 		if too_close.exists():
-			policy_problems.append("Separate reservations for this tool that belong to you must be at least " + str(new_reservation.tool.minimum_time_between_reservations) + " minutes apart from each other. The proposed reservation begins too close to another reservation.")
+			tool_policy_problems.append("Separate reservations for this tool that belong to you must be at least " + str(
+				new_reservation.tool.minimum_time_between_reservations) + " minutes apart from each other. The proposed reservation begins too close to another reservation.")
 
 	# Check that the user is not exceeding the maximum amount of time they may reserve in the future.
 	# Staff may break this rule.
 	# An explicit policy override allows this rule to be broken.
 	if new_reservation.tool.maximum_future_reservation_time:
-		reservations_after_now = Reservation.objects.filter(cancelled=False, user=user, tool=new_reservation.tool, start__gte=timezone.now())
+		reservations_after_now = Reservation.objects.filter(cancelled=False, user=user, tool=new_reservation.tool,
+															start__gte=timezone.now())
 		if cancelled_reservation and cancelled_reservation.id:
 			reservations_after_now = reservations_after_now.exclude(id=cancelled_reservation.id)
 		amount_reserved_in_the_future = new_reservation.duration()
 		for r in reservations_after_now:
 			amount_reserved_in_the_future += r.duration()
 		if amount_reserved_in_the_future.total_seconds() / 60 > new_reservation.tool.maximum_future_reservation_time:
-			policy_problems.append("You may only reserve up to " + str(new_reservation.tool.maximum_future_reservation_time) + " minutes of time on this tool, starting from the current time onward.")
+			tool_policy_problems.append("You may only reserve up to " + str(
+				new_reservation.tool.maximum_future_reservation_time) + " minutes of time on this tool, starting from the current time onward.")
 
-	# Return the list of all policies that are not met.
-	return policy_problems, overridable
+	return tool_policy_problems
+
 
 
 def check_policy_to_cancel_reservation(reservation, user):

@@ -1,4 +1,5 @@
 import datetime
+import os
 import socket
 import struct
 import pytz
@@ -14,15 +15,15 @@ from django.contrib.auth.hashers import make_password, check_password
 from django.contrib.auth.models import Group, Permission, BaseUserManager
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
-from django.core.mail import send_mail
 from django.db import models
 from django.db.models import Q
 from django.db.models.signals import pre_delete
+from django.dispatch import receiver
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.crypto import get_random_string
 
-from NEMO.utilities import format_datetime
+from NEMO.utilities import format_datetime, send_mail, get_task_image_filename
 from NEMO.views.constants import ADDITIONAL_INFORMATION_MAXIMUM_LENGTH
 from NEMO.widgets.configuration_editor import ConfigurationEditor
 
@@ -44,6 +45,15 @@ class CalendarDisplay(models.Model):
 
 	class Meta:
 		abstract = True
+
+
+class UserPreferences(models.Model):
+	attach_created_reservation = models.BooleanField('created_reservation_invite', default=False, help_text='Whether or not to send a calendar invitation when creating a new reservation')
+	attach_cancelled_reservation = models.BooleanField('cancelled_reservation_invite', default=False, help_text='Whether or not to send a calendar invitation when cancelling a reservation')
+
+	class Meta:
+		verbose_name = 'User preferences'
+		verbose_name_plural = 'User preferences'
 
 
 class UserManager(BaseUserManager):
@@ -109,6 +119,9 @@ class User(models.Model):
 	qualifications = models.ManyToManyField('Tool', blank=True, help_text='Select the tools that the user is qualified to use.')
 	projects = models.ManyToManyField('Project', blank=True, help_text='Select the projects that this user is currently working on.')
 
+	# Preferences
+	preferences: UserPreferences = models.OneToOneField(UserPreferences, null=True)
+
 	USERNAME_FIELD = 'username'
 	REQUIRED_FIELDS = ['first_name', 'last_name', 'email']
 	objects = UserManager()
@@ -169,9 +182,9 @@ class User(models.Model):
 	def get_username(self):
 		return self.username
 
-	def email_user(self, subject, message, from_email=None):
+	def email_user(self, subject, message, from_email, attachments=None):
 		""" Sends an email to this user. """
-		send_mail(subject=subject, message='', from_email=from_email, recipient_list=[self.email], html_message=message)
+		send_mail(subject=subject, message=message, from_email=from_email, recipient_list=[self.email], attachments=attachments)
 
 	def get_full_name(self):
 		return self.first_name + ' ' + self.last_name + ' (' + self.username + ')'
@@ -227,14 +240,14 @@ class Tool(models.Model):
 	category = models.CharField(max_length=1000, help_text="Create sub-categories using slashes. For example \"Category 1/Sub-category 1\".")
 	visible = models.BooleanField(default=True, help_text="Specifies whether this tool is visible to users.")
 	operational = models.BooleanField(default=False, help_text="Marking the tool non-operational will prevent users from using the tool.")
-	primary_owner = models.ForeignKey(User, related_name="primary_tool_owner", help_text="The staff member who is responsible for administration of this tool.")
+	primary_owner = models.ForeignKey(User, related_name="primary_tool_owner", help_text="The staff member who is responsible for administration of this tool.", on_delete=models.PROTECT)
 	backup_owners = models.ManyToManyField(User, blank=True, related_name="backup_for_tools", help_text="Alternate staff members who are responsible for administration of this tool when the primary owner is unavailable.")
 	location = models.CharField(max_length=100)
 	phone_number = models.CharField(max_length=100)
 	notification_email_address = models.EmailField(blank=True, null=True, help_text="Messages that relate to this tool (such as comments, problems, and shutdowns) will be forwarded to this email address. This can be a normal email address or a mailing list address.")
 	# Policy fields:
-	requires_area_access = models.ForeignKey('Area', null=True, blank=True, help_text="Indicates that this tool is physically located in a billable area and requires an active area access record in order to be operated.")
-	grant_physical_access_level_upon_qualification = models.ForeignKey('PhysicalAccessLevel', null=True, blank=True, help_text="The designated physical access level is granted to the user upon qualification for this tool.")
+	requires_area_access = models.ForeignKey('Area', null=True, blank=True, help_text="Indicates that this tool is physically located in a billable area and requires an active area access record in order to be operated.", on_delete=models.PROTECT)
+	grant_physical_access_level_upon_qualification = models.ForeignKey('PhysicalAccessLevel', null=True, blank=True, help_text="The designated physical access level is granted to the user upon qualification for this tool.", on_delete=models.PROTECT)
 	grant_badge_reader_access_upon_qualification = models.CharField(max_length=100, null=True, blank=True, help_text="Badge reader access is granted to the user upon qualification for this tool.")
 	interlock = models.OneToOneField('Interlock', blank=True, null=True, on_delete=models.SET_NULL)
 	reservation_horizon = models.PositiveIntegerField(default=14, null=True, blank=True, help_text="Users may create reservations this many days in advance. Leave this field blank to indicate that no reservation horizon exists for this tool.")
@@ -247,6 +260,10 @@ class Tool(models.Model):
 	allow_delayed_logoff = models.BooleanField(default=False, help_text='Upon logging off users may enter a delay before another user may use the tool. Some tools require "spin-down" or cleaning time after use.')
 	reservation_required = models.BooleanField(default=False, help_text='Require that users have a current (within 15 minutes) reservation in order to use the tool')
 	post_usage_questions = models.TextField(null=True, blank=True, help_text="")
+	policy_off_between_times = models.BooleanField(default=False, help_text="Check this box to disable policy rules every day between the given times")
+	policy_off_start_time = models.TimeField(null=True, blank=True, help_text="The start time when policy rules should NOT be enforced")
+	policy_off_end_time = models.TimeField(null=True, blank=True, help_text="The end time when policy rules should NOT be enforced")
+	policy_off_weekend = models.BooleanField(default=False, help_text="Whether or not policy rules should be enforced on weekends")
 
 	class Meta:
 		ordering = ['name']
@@ -351,9 +368,28 @@ class Tool(models.Model):
 		except UsageEvent.DoesNotExist:
 			return None
 
+	def should_enforce_policy(self, reservation):
+		""" Returns whether or not the policy rules should be enforced. """
+		should_enforce = True
+
+		start_time = reservation.start.astimezone(timezone.get_current_timezone())
+		end_time = reservation.end.astimezone(timezone.get_current_timezone())
+		if self.policy_off_weekend and start_time.weekday() >= 5 and end_time.weekday() >= 5:
+			should_enforce = False
+		if self.policy_off_between_times and self.policy_off_start_time and self.policy_off_end_time:
+			if self.policy_off_start_time <= self.policy_off_end_time:
+				""" Range something like 6am-6pm """
+				if self.policy_off_start_time <= start_time.time() <= self.policy_off_end_time and self.policy_off_start_time <= end_time.time() <= self.policy_off_end_time:
+					should_enforce = False
+			else:
+				""" Range something like 6pm-6am """
+				if (self.policy_off_start_time <= start_time.time() or start_time.time() <= self.policy_off_end_time) and (self.policy_off_start_time <= end_time.time() or end_time.time() <= self.policy_off_end_time):
+					should_enforce = False
+		return should_enforce
+
 
 class Configuration(models.Model):
-	tool = models.ForeignKey(Tool, help_text="The tool that this configuration option applies to.")
+	tool = models.ForeignKey(Tool, help_text="The tool that this configuration option applies to.", on_delete=models.CASCADE)
 	name = models.CharField(max_length=200, help_text="The name of this overall configuration. This text is displayed as a label on the tool control page.")
 	configurable_item_name = models.CharField(blank=True, null=True, max_length=200, help_text="The name of the tool part being configured. This text is displayed as a label on the tool control page. Leave this field blank if there is only one configuration slot.")
 	advance_notice_limit = models.PositiveIntegerField(help_text="Configuration changes must be made this many hours in advance.")
@@ -414,10 +450,10 @@ class TrainingSession(models.Model):
 			(GROUP, 'Group')
 		)
 
-	trainer = models.ForeignKey(User, related_name="teacher_set")
-	trainee = models.ForeignKey(User, related_name="student_set")
-	tool = models.ForeignKey(Tool)
-	project = models.ForeignKey('Project')
+	trainer = models.ForeignKey(User, related_name="teacher_set", on_delete=models.CASCADE)
+	trainee = models.ForeignKey(User, related_name="student_set", on_delete=models.CASCADE)
+	tool = models.ForeignKey(Tool, on_delete=models.CASCADE)
+	project = models.ForeignKey('Project', on_delete=models.CASCADE)
 	duration = models.PositiveIntegerField(help_text="The duration of the training session in minutes.")
 	type = models.IntegerField(choices=Type.Choices)
 	date = models.DateTimeField(default=timezone.now)
@@ -431,9 +467,9 @@ class TrainingSession(models.Model):
 
 
 class StaffCharge(CalendarDisplay):
-	staff_member = models.ForeignKey(User, related_name='staff_charge_actor')
-	customer = models.ForeignKey(User, related_name='staff_charge_customer')
-	project = models.ForeignKey('Project')
+	staff_member = models.ForeignKey(User, related_name='staff_charge_actor', on_delete=models.CASCADE)
+	customer = models.ForeignKey(User, related_name='staff_charge_customer', on_delete=models.CASCADE)
+	project = models.ForeignKey('Project', on_delete=models.CASCADE)
 	start = models.DateTimeField(default=timezone.now)
 	end = models.DateTimeField(null=True, blank=True)
 	validated = models.BooleanField(default=False)
@@ -457,12 +493,12 @@ class Area(models.Model):
 
 
 class AreaAccessRecord(CalendarDisplay):
-	area = models.ForeignKey(Area)
-	customer = models.ForeignKey(User)
-	project = models.ForeignKey('Project')
+	area = models.ForeignKey(Area, on_delete=models.CASCADE)
+	customer = models.ForeignKey(User, on_delete=models.CASCADE)
+	project = models.ForeignKey('Project', on_delete=models.CASCADE)
 	start = models.DateTimeField(default=timezone.now)
 	end = models.DateTimeField(null=True, blank=True)
-	staff_charge = models.ForeignKey(StaffCharge, blank=True, null=True)
+	staff_charge = models.ForeignKey(StaffCharge, blank=True, null=True, on_delete=models.CASCADE)
 
 	class Meta:
 		ordering = ['-start']
@@ -472,8 +508,8 @@ class AreaAccessRecord(CalendarDisplay):
 
 
 class ConfigurationHistory(models.Model):
-	configuration = models.ForeignKey(Configuration)
-	user = models.ForeignKey(User)
+	configuration = models.ForeignKey(Configuration, on_delete=models.CASCADE)
+	user = models.ForeignKey(User, on_delete=models.CASCADE)
 	modification_time = models.DateTimeField(default=timezone.now)
 	slot = models.PositiveIntegerField()
 	setting = models.TextField()
@@ -500,7 +536,7 @@ class Account(models.Model):
 class Project(models.Model):
 	name = models.CharField(max_length=100, unique=True)
 	application_identifier = models.CharField(max_length=100)
-	account = models.ForeignKey(Account, help_text="All charges for this project will be billed to the selected account.")
+	account = models.ForeignKey(Account, help_text="All charges for this project will be billed to the selected account.", on_delete=models.CASCADE)
 	active = models.BooleanField(default=True, help_text="Users may only charge to a project if it is active. Deactivate the project to block billable activity (such as tool usage and consumable check-outs).")
 
 	class Meta:
@@ -526,17 +562,17 @@ pre_delete.connect(pre_delete_entity, sender=User)
 
 
 class Reservation(CalendarDisplay):
-	user = models.ForeignKey(User, related_name="reservation_user")
-	creator = models.ForeignKey(User, related_name="reservation_creator")
+	user = models.ForeignKey(User, related_name="reservation_user", on_delete=models.CASCADE)
+	creator = models.ForeignKey(User, related_name="reservation_creator", on_delete=models.CASCADE)
 	creation_time = models.DateTimeField(default=timezone.now)
-	tool = models.ForeignKey(Tool)
-	project = models.ForeignKey(Project, null=True, blank=True, help_text="Indicates the intended project for this reservation. A missed reservation would be billed to this project.")
+	tool = models.ForeignKey(Tool, on_delete=models.CASCADE)
+	project = models.ForeignKey(Project, null=True, blank=True, help_text="Indicates the intended project for this reservation. A missed reservation would be billed to this project.", on_delete=models.CASCADE)
 	start = models.DateTimeField('start')
 	end = models.DateTimeField('end')
 	short_notice = models.BooleanField(default=None, help_text="Indicates that the reservation was made after the configuration deadline for a tool. NanoFab staff may not have enough time to properly configure the tool before the user is scheduled to use it.")
 	cancelled = models.BooleanField(default=False, help_text="Indicates that the reservation has been cancelled, moved, or resized.")
 	cancellation_time = models.DateTimeField(null=True, blank=True)
-	cancelled_by = models.ForeignKey(User, null=True, blank=True)
+	cancelled_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
 	missed = models.BooleanField(default=False, help_text="Indicates that the tool was not enabled by anyone before the tool's \"missed reservation threshold\" passed.")
 	shortened = models.BooleanField(default=False, help_text="Indicates that the user finished using the tool and relinquished the remaining time on their reservation. The reservation will no longer be visible on the calendar and a descendant reservation will be created in place of the existing one.")
 	descendant = models.OneToOneField('Reservation', related_name='ancestor', null=True, blank=True, help_text="Any time a reservation is moved or resized, the old reservation is cancelled and a new reservation with updated information takes its place. This field links the old reservation to the new one, so the history of reservation moves & changes can be easily tracked.")
@@ -550,6 +586,14 @@ class Reservation(CalendarDisplay):
 	def has_not_ended(self):
 		return False if self.end < timezone.now() else True
 
+	def save_and_notify(self):
+		self.save()
+		from NEMO.views.calendar import send_user_cancelled_reservation_notification, send_user_created_reservation_notification
+		if self.cancelled:
+			send_user_cancelled_reservation_notification(self)
+		else:
+			send_user_created_reservation_notification(self)
+
 	class Meta:
 		ordering = ['-start']
 
@@ -558,10 +602,10 @@ class Reservation(CalendarDisplay):
 
 
 class UsageEvent(CalendarDisplay):
-	user = models.ForeignKey(User, related_name="usage_event_user")
-	operator = models.ForeignKey(User, related_name="usage_event_operator")
-	project = models.ForeignKey(Project)
-	tool = models.ForeignKey(Tool, related_name='+')  # The related_name='+' disallows reverse lookups. Helper functions of other models should be used instead.
+	user = models.ForeignKey(User, related_name="usage_event_user", on_delete=models.CASCADE)
+	operator = models.ForeignKey(User, related_name="usage_event_operator", on_delete=models.CASCADE)
+	project = models.ForeignKey(Project, on_delete=models.CASCADE)
+	tool = models.ForeignKey(Tool, related_name='+', on_delete=models.CASCADE)  # The related_name='+' disallows reverse lookups. Helper functions of other models should be used instead.
 	start = models.DateTimeField(default=timezone.now)
 	end = models.DateTimeField(null=True, blank=True)
 	validated = models.BooleanField(default=False)
@@ -588,7 +632,7 @@ class ConsumableCategory(models.Model):
 
 class Consumable(models.Model):
 	name = models.CharField(max_length=100)
-	category = models.ForeignKey('ConsumableCategory', blank=True, null=True)
+	category = models.ForeignKey('ConsumableCategory', blank=True, null=True, on_delete=models.CASCADE)
 	quantity = models.IntegerField(help_text="The number of items currently in stock.")
 	visible = models.BooleanField(default=True)
 	reminder_threshold = models.IntegerField(help_text="More of this item should be ordered when the quantity falls below this threshold.")
@@ -640,11 +684,11 @@ class StockroomItem(models.Model):
 		return self.name
 
 class StockroomWithdraw(models.Model):
-	customer = models.ForeignKey(User, related_name="stockroom_user", help_text="The user who will use the stockroom item.")
-	merchant = models.ForeignKey(User, related_name="stockroom_merchant", help_text="The staff member that performed the withdraw.")
-	stock = models.ForeignKey(StockroomItem)
+	customer = models.ForeignKey(User, related_name="stockroom_user", help_text="The user who will use the stockroom item.", on_delete=models.CASCADE)
+	merchant = models.ForeignKey(User, related_name="stockroom_merchant", help_text="The staff member that performed the withdraw.", on_delete=models.CASCADE)
+	stock = models.ForeignKey(StockroomItem, on_delete=models.CASCADE)
 	quantity = models.PositiveIntegerField()
-	project = models.ForeignKey(Project, help_text="The withdraw will be billed to this project.")
+	project = models.ForeignKey(Project, help_text="The withdraw will be billed to this project.", on_delete=models.CASCADE)
 	date = models.DateTimeField(default=timezone.now, help_text="The date and time when the user withdrew the consumable.")
 
 	class Meta:
@@ -679,7 +723,7 @@ class Interlock(models.Model):
 			(LOCKED, 'Locked'),
 		)
 
-	card = models.ForeignKey(InterlockCard)
+	card = models.ForeignKey(InterlockCard, on_delete=models.CASCADE)
 	channel = models.PositiveIntegerField()
 	state = models.IntegerField(choices=State.Choices, default=State.UNKNOWN)
 	most_recent_reply = models.TextField(default="None")
@@ -825,23 +869,23 @@ class Task(models.Model):
 			(HIGH, 'High'),
 		)
 	urgency = models.IntegerField(choices=Urgency.Choices)
-	tool = models.ForeignKey(Tool, help_text="The tool that this task relates to.")
+	tool = models.ForeignKey(Tool, help_text="The tool that this task relates to.", on_delete=models.CASCADE)
 	force_shutdown = models.BooleanField(default=None, help_text="Indicates that the tool this task relates to will be shutdown until the task is resolved.")
 	safety_hazard = models.BooleanField(default=None, help_text="Indicates that this task represents a safety hazard to the NanoFab.")
-	creator = models.ForeignKey(User, related_name="created_tasks", help_text="The user who created the task.")
+	creator = models.ForeignKey(User, related_name="created_tasks", help_text="The user who created the task.", on_delete=models.CASCADE)
 	creation_time = models.DateTimeField(default=timezone.now, help_text="The date and time when the task was created.")
-	problem_category = models.ForeignKey('TaskCategory', null=True, blank=True, related_name='problem_category')
+	problem_category = models.ForeignKey('TaskCategory', null=True, blank=True, related_name='problem_category', on_delete=models.SET_NULL)
 	problem_description = models.TextField(blank=True, null=True)
 	progress_description = models.TextField(blank=True, null=True)
 	last_updated = models.DateTimeField(null=True, blank=True, help_text="The last time this task was modified. (Creating the task does not count as modifying it.)")
-	last_updated_by = models.ForeignKey(User, null=True, blank=True, help_text="The last user who modified this task. This should always be a staff member.")
+	last_updated_by = models.ForeignKey(User, null=True, blank=True, help_text="The last user who modified this task. This should always be a staff member.", on_delete=models.SET_NULL)
 	estimated_resolution_time = models.DateTimeField(null=True, blank=True, help_text="The estimated date and time that the task will be resolved.")
 	cancelled = models.BooleanField(default=False)
 	resolved = models.BooleanField(default=False)
 	resolution_time = models.DateTimeField(null=True, blank=True, help_text="The timestamp of when the task was marked complete or cancelled.")
-	resolver = models.ForeignKey(User, null=True, blank=True, related_name='task_resolver', help_text="The staff member who resolved the task.")
+	resolver = models.ForeignKey(User, null=True, blank=True, related_name='task_resolver', help_text="The staff member who resolved the task.", on_delete=models.SET_NULL)
 	resolution_description = models.TextField(blank=True, null=True)
-	resolution_category = models.ForeignKey('TaskCategory', null=True, blank=True, related_name='resolution_category')
+	resolution_category = models.ForeignKey('TaskCategory', null=True, blank=True, related_name='resolution_category', on_delete=models.SET_NULL)
 
 	class Meta:
 		ordering = ['-creation_time']
@@ -855,6 +899,48 @@ class Task(models.Model):
 			return TaskHistory.objects.filter(task_id=self.id).latest().status
 		except TaskHistory.DoesNotExist:
 			return None
+
+	def task_images(self):
+		return TaskImages.objects.filter(task=self).order_by()
+
+
+class TaskImages(models.Model):
+	task = models.ForeignKey(Task, on_delete=models.CASCADE)
+	image = models.ImageField(upload_to=get_task_image_filename, verbose_name='Image')
+	uploaded_at = models.DateTimeField(auto_now_add=True)
+
+	def filename(self):
+		return os.path.basename(self.image.name)
+
+	class Meta:
+		verbose_name_plural = "Task images"
+		ordering = ['-uploaded_at']
+
+
+# These two auto-delete task images from filesystem when they are unneeded:
+@receiver(models.signals.post_delete, sender=TaskImages)
+def auto_delete_file_on_delete(sender, instance: TaskImages, **kwargs):
+	"""	Deletes file from filesystem when corresponding `TaskImages` object is deleted.	"""
+	if instance.image:
+		if os.path.isfile(instance.image.path):
+			os.remove(instance.image.path)
+
+
+@receiver(models.signals.pre_save, sender=TaskImages)
+def auto_delete_file_on_change(sender, instance: TaskImages, **kwargs):
+	"""	Deletes old file from filesystem when corresponding `TaskImages` object is updated with new file. """
+	if not instance.pk:
+		return False
+
+	try:
+		old_file = TaskImages.objects.get(pk=instance.pk).image
+	except TaskImages.DoesNotExist:
+		return False
+
+	new_file = instance.image
+	if not old_file == new_file:
+		if os.path.isfile(old_file.path):
+			os.remove(old_file.path)
 
 
 class TaskCategory(models.Model):
@@ -893,10 +979,10 @@ class TaskStatus(models.Model):
 
 
 class TaskHistory(models.Model):
-	task = models.ForeignKey(Task, help_text='The task that this historical entry refers to', related_name='history')
+	task = models.ForeignKey(Task, help_text='The task that this historical entry refers to', related_name='history', on_delete=models.CASCADE)
 	status = models.CharField(max_length=200, help_text="A text description of the task's status")
 	time = models.DateTimeField(auto_now_add=True, help_text='The date and time when the task status was changed')
-	user = models.ForeignKey(User, help_text='The user that changed the task to this status')
+	user = models.ForeignKey(User, help_text='The user that changed the task to this status', on_delete=models.CASCADE)
 	shutdown = models.BooleanField(default=False, help_text='Whether or not tool was shut down during this period')
 
 	class Meta:
@@ -906,13 +992,13 @@ class TaskHistory(models.Model):
 
 
 class Comment(models.Model):
-	tool = models.ForeignKey(Tool, help_text="The tool that this comment relates to.")
-	author = models.ForeignKey(User)
+	tool = models.ForeignKey(Tool, help_text="The tool that this comment relates to.", on_delete=models.CASCADE)
+	author = models.ForeignKey(User, on_delete=models.CASCADE)
 	creation_date = models.DateTimeField(default=timezone.now)
 	expiration_date = models.DateTimeField(blank=True, null=True, help_text="The comment will only be visible until this date.")
 	visible = models.BooleanField(default=True)
 	hide_date = models.DateTimeField(blank=True, null=True, help_text="The date when this comment was hidden. If it is still visible or has expired then this date should be empty.")
-	hidden_by = models.ForeignKey(User, null=True, blank=True, related_name="hidden_comments")
+	hidden_by = models.ForeignKey(User, null=True, blank=True, related_name="hidden_comments", on_delete=models.SET_NULL)
 	content = models.TextField()
 
 	class Meta:
@@ -935,7 +1021,7 @@ class ResourceCategory(models.Model):
 
 class Resource(models.Model):
 	name = models.CharField(max_length=200)
-	category = models.ForeignKey(ResourceCategory, blank=True, null=True)
+	category = models.ForeignKey(ResourceCategory, blank=True, null=True, on_delete=models.SET_NULL)
 	available = models.BooleanField(default=True, help_text="Indicates whether the resource is available to be used.")
 	fully_dependent_tools = models.ManyToManyField(Tool, blank=True, related_name="required_resource_set", help_text="These tools will be completely inoperable if the resource is unavailable.")
 	partially_dependent_tools = models.ManyToManyField(Tool, blank=True, related_name="nonrequired_resource_set", help_text="These tools depend on this resource but can operated at a reduced capacity if the resource is unavailable.")
@@ -964,12 +1050,12 @@ class ActivityHistory(models.Model):
 			(DEACTIVATED, 'Deactivated'),
 		)
 
-	content_type = models.ForeignKey(ContentType)
+	content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
 	object_id = models.PositiveIntegerField()
 	content_object = GenericForeignKey('content_type', 'object_id')
 	action = models.BooleanField(choices=Action.Choices, default=None, help_text="The target state (activated or deactivated).")
 	date = models.DateTimeField(default=timezone.now, help_text="The time at which the active state was changed.")
-	authorizer = models.ForeignKey(User, help_text="The staff member who changed the active state of the account, project, or user in question.")
+	authorizer = models.ForeignKey(User, help_text="The staff member who changed the active state of the account, project, or user in question.", on_delete=models.CASCADE)
 
 	class Meta:
 		ordering = ['-date']
@@ -999,17 +1085,17 @@ class MembershipHistory(models.Model):
 		)
 
 	# The parent entity can be either an account or project.
-	parent_content_type = models.ForeignKey(ContentType, related_name="parent_content_type")
+	parent_content_type = models.ForeignKey(ContentType, related_name="parent_content_type", on_delete=models.CASCADE)
 	parent_object_id = models.PositiveIntegerField()
 	parent_content_object = GenericForeignKey('parent_content_type', 'parent_object_id')
 
 	# The child entity can be either a project or user.
-	child_content_type = models.ForeignKey(ContentType, related_name="child_content_type")
+	child_content_type = models.ForeignKey(ContentType, related_name="child_content_type", on_delete=models.CASCADE)
 	child_object_id = models.PositiveIntegerField()
 	child_content_object = GenericForeignKey('child_content_type', 'child_object_id')
 
 	date = models.DateTimeField(default=timezone.now, help_text="The time at which the membership status was changed.")
-	authorizer = models.ForeignKey(User, help_text="The staff member who changed the membership status of the account, project, or user in question.")
+	authorizer = models.ForeignKey(User, help_text="The staff member who changed the membership status of the account, project, or user in question.", on_delete=models.CASCADE)
 	action = models.BooleanField(choices=Action.Choices, default=None)
 
 	class Meta:
@@ -1033,7 +1119,7 @@ def calculate_duration(start, end, unfinished_reason):
 
 class Door(models.Model):
 	name = models.CharField(max_length=100)
-	area = models.ForeignKey(Area, related_name='doors')
+	area = models.ForeignKey(Area, related_name='doors', on_delete=models.PROTECT)
 	interlock = models.OneToOneField(Interlock)
 
 	def __str__(self):
@@ -1046,7 +1132,7 @@ class Door(models.Model):
 
 class PhysicalAccessLevel(models.Model):
 	name = models.CharField(max_length=100)
-	area = models.ForeignKey(Area)
+	area = models.ForeignKey(Area, on_delete=models.CASCADE)
 	hours_start = models.PositiveIntegerField(default=8, help_text="Time in 24 hour format of start of access, for restricted access type")
 	hours_end = models.PositiveIntegerField(default=20, help_text="Time in 24 hour format of end of access, for restricted access type")
 	class Schedule(object):
@@ -1096,8 +1182,8 @@ class PhysicalAccessType(object):
 
 
 class PhysicalAccessLog(models.Model):
-	user = models.ForeignKey(User)
-	door = models.ForeignKey(Door)
+	user = models.ForeignKey(User, on_delete=models.CASCADE)
+	door = models.ForeignKey(Door, on_delete=models.CASCADE)
 	time = models.DateTimeField()
 	result = models.BooleanField(choices=PhysicalAccessType.Choices, default=None)
 	details = models.TextField(null=True, blank=True, help_text="Any details that should accompany the log entry. For example, the reason physical access was denied.")
@@ -1107,7 +1193,7 @@ class PhysicalAccessLog(models.Model):
 
 
 class SafetyIssue(models.Model):
-	reporter = models.ForeignKey(User, blank=True, null=True, related_name='reported_safety_issues')
+	reporter = models.ForeignKey(User, blank=True, null=True, related_name='reported_safety_issues', on_delete=models.SET_NULL)
 	location = models.CharField(max_length=200)
 	creation_time = models.DateTimeField(auto_now_add=True)
 	visible = models.BooleanField(default=True, help_text='Should this safety issue be visible to all users? When unchecked, the issue is only visible to staff.')
@@ -1116,7 +1202,7 @@ class SafetyIssue(models.Model):
 	resolution = models.TextField(blank=True, null=True)
 	resolved = models.BooleanField(default=False)
 	resolution_time = models.DateTimeField(blank=True, null=True)
-	resolver = models.ForeignKey(User, related_name='resolved_safety_issues', blank=True, null=True)
+	resolver = models.ForeignKey(User, related_name='resolved_safety_issues', blank=True, null=True, on_delete=models.SET_NULL)
 
 	class Meta:
 		ordering = ['-creation_time']
@@ -1133,10 +1219,10 @@ class Alert(models.Model):
 	title = models.CharField(blank=True, max_length=100)
 	contents = models.CharField(max_length=500)
 	creation_time = models.DateTimeField(default=timezone.now)
-	creator = models.ForeignKey(User, null=True, blank=True, related_name='+')
+	creator = models.ForeignKey(User, null=True, blank=True, related_name='+', on_delete=models.SET_NULL)
 	debut_time = models.DateTimeField(help_text='The alert will not be displayed to users until the debut time is reached.')
 	expiration_time = models.DateTimeField(null=True, blank=True, help_text='The alert can be deleted after the expiration time is reached.')
-	user = models.ForeignKey(User, null=True, blank=True, related_name='alerts', help_text='The alert will be visible for this user. The alert is visible to all users when this is empty.')
+	user = models.ForeignKey(User, null=True, blank=True, related_name='alerts', help_text='The alert will be visible for this user. The alert is visible to all users when this is empty.', on_delete=models.CASCADE)
 	dismissible = models.BooleanField(default=False, help_text="Allows the user to delete the alert. This is only valid when the 'user' field is set.")
 
 	class Meta:
@@ -1161,7 +1247,7 @@ class ContactInformationCategory(models.Model):
 class ContactInformation(models.Model):
 	name = models.CharField(max_length=200)
 	image = models.ImageField(blank=True, help_text='Portraits are resized to 266 pixels high and 200 pixels wide. Crop portraits to these dimensions before uploading for optimal bandwidth usage')
-	category = models.ForeignKey(ContactInformationCategory)
+	category = models.ForeignKey(ContactInformationCategory, on_delete=models.CASCADE)
 	email = models.EmailField(blank=True)
 	office_phone = models.CharField(max_length=40, blank=True)
 	office_location = models.CharField(max_length=200, blank=True)
@@ -1177,9 +1263,9 @@ class ContactInformation(models.Model):
 
 
 class Notification(models.Model):
-	user = models.ForeignKey(User, related_name='notifications')
+	user = models.ForeignKey(User, related_name='notifications', on_delete=models.CASCADE)
 	expiration = models.DateTimeField()
-	content_type = models.ForeignKey(ContentType)
+	content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
 	object_id = models.PositiveIntegerField()
 	content_object = GenericForeignKey('content_type', 'object_id')
 
@@ -1236,12 +1322,12 @@ class ScheduledOutageCategory(models.Model):
 class ScheduledOutage(models.Model):
 	start = models.DateTimeField()
 	end = models.DateTimeField()
-	creator = models.ForeignKey(User)
+	creator = models.ForeignKey(User, on_delete=models.CASCADE)
 	title = models.CharField(max_length=100, help_text="A brief description to quickly inform users about the outage")
 	details = models.TextField(blank=True, help_text="A detailed description of why there is a scheduled outage, and what users can expect during the outage")
 	category = models.CharField(blank=True, max_length=200, help_text="A categorical reason for why this outage is scheduled. Useful for trend analytics.")
-	tool = models.ForeignKey(Tool, null=True)
-	resource = models.ForeignKey(Resource, null=True)
+	tool = models.ForeignKey(Tool, null=True, on_delete=models.CASCADE)
+	resource = models.ForeignKey(Resource, null=True, on_delete=models.CASCADE)
 
 	def __str__(self):
 		return str(self.title)
@@ -1313,8 +1399,8 @@ class ChemicalRequest(models.Model):
 			(APPROVED, 'Approved'),
 			(DENIED, 'Denied')
 		)
-	requester = models.ForeignKey(User, blank=True, null=True, related_name="chemical_requester")
-	approver = models.ForeignKey(User, blank=True, null=True, related_name="chemical_approver")
+	requester = models.ForeignKey(User, blank=True, null=True, related_name="chemical_requester", on_delete=models.SET_NULL)
+	approver = models.ForeignKey(User, blank=True, null=True, related_name="chemical_approver", on_delete=models.SET_NULL)
 	date = models.DateTimeField(auto_now_add=True)
 	chemical_name = models.CharField(max_length=200)
 	cas = models.CharField(max_length=100)
@@ -1343,11 +1429,11 @@ class ChemicalRequest(models.Model):
 		return str(self.id)
 
 class UserChemical(models.Model):
-	owner = models.ForeignKey(User)
+	owner = models.ForeignKey(User, on_delete=models.PROTECT)
 	label_id = models.PositiveIntegerField(unique=True)
 	chemical_name = models.CharField(max_length=200)
 	sds_link = models.URLField(max_length=200, blank=True, null=True)
-	request = models.ForeignKey(ChemicalRequest, blank=True, null=True)
+	request = models.ForeignKey(ChemicalRequest, blank=True, null=True, on_delete=models.SET_NULL)
 	in_date = models.DateField()
 	expiration = models.DateField()
 	location = models.CharField(max_length=100)

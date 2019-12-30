@@ -87,6 +87,11 @@ label
 	background-color: #e7e7e7;
 }
 
+#sidebar .disabled
+{
+	opacity: .4;
+}
+
 .status-icon
 {
 	font-size: 1.5em;
@@ -258,4 +263,58 @@ Twitter Typeahead autocomplete dropdown menu isn't chopped off. */
   display: flex;
   display: -webkit-flex;
   flex-wrap: wrap;
+}
+
+.page-footer {
+	margin-top: 20px;
+  	border-top: 1px solid #eee;
+	line-height: 40px;
+	text-align: center;
+}
+
+.body-container {
+	/* 100 viewport - header (height+border+margin) - footer (height+border+margin) */
+	min-height: calc(100vh - 71px - 61px);
+}
+
+.customization-separation {
+	margin-bottom: 15px;
+	margin-left: -15px;
+	margin-right: -15px;
+	border-top: 1px solid #ddd
+}
+
+.customization-content {
+	margin-top: 10px;
+	white-space: pre-wrap;
+	font-family: monospace;
+	font-size: 12px;
+}
+
+.customization-input-file {
+	color: transparent;
+	display: inline-block !important;
+	margin-right: -170px;
+}
+
+.navbar-preferences > a {
+	padding-left: 0 !important;
+	padding-right: 0 !important;
+}
+
+.navbar-preferences > a > img {
+	width: 19px;
+	height: 19px;
+}
+
+body.logout-error {
+	background-color: red;
+}
+
+body.logout-warning {
+	background-color: orange;
+}
+
+body.logout-success {
+	background-color: green;
 }

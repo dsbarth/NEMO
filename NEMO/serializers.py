@@ -1,4 +1,5 @@
-from rest_framework.serializers import ModelSerializer
+from rest_framework.fields import FloatField, CharField, IntegerField, DateTimeField, ChoiceField
+from rest_framework.serializers import Serializer, ModelSerializer
 
 from NEMO.models import User, Project, Account, Reservation, AreaAccessRecord, UsageEvent, Task, TaskHistory, Sensor, ScheduledOutage, Tool, Interlock, StockroomWithdraw, StockroomItem, UserChemical
 
@@ -6,7 +7,7 @@ from NEMO.models import User, Project, Account, Reservation, AreaAccessRecord, U
 class UserSerializer(ModelSerializer):
 	class Meta:
 		model = User
-		fields = ('id', 'first_name', 'last_name', 'username', 'email', 'physical_access_levels', 'type', 'date_joined', 'access_expiration')
+		fields = ('id', 'first_name', 'last_name', 'username', 'email', 'physical_access_levels', 'type', 'date_joined', 'access_expiration', 'badge_number', 'is_active')
 
 
 class ProjectSerializer(ModelSerializer):
@@ -92,4 +93,27 @@ class StockroomItemSerializer(ModelSerializer):
 class UserChemicalSerializer(ModelSerializer):
 	class Meta:
 		model = UserChemical
+
+
+class BillableItemSerializer(Serializer):
+	type = ChoiceField(['missed_reservation', 'tool_usage', 'area_access', 'consumable'])
+	details = CharField(max_length=500, read_only=True)
+	account = CharField(max_length=200, read_only=True)
+	account_id = IntegerField(read_only=True)
+	project = CharField(max_length=200, read_only=True)
+	project_id = IntegerField(read_only=True)
+	application = CharField(max_length=200, read_only=True)
+	username = CharField(max_length=200, read_only=True)
+	user_id = IntegerField(read_only=True)
+	start = DateTimeField(read_only=True)
+	end = DateTimeField(read_only=True)
+	quantity = FloatField(read_only=True)
+
+	def update(self, instance, validated_data):
+		pass
+
+	def create(self, validated_data):
+		pass
+
+	class Meta:
 		fields = '__all__'

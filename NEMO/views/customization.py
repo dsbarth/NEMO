@@ -35,6 +35,7 @@ customizable_key_values = [
 	'exclude_from_usage',
 	'self_log_in',
 	'facility_name',
+	'self_log_out',
 ]
 
 customizable_content = [
@@ -55,6 +56,8 @@ customizable_content = [
 	'unauthorized_tool_access_email',
 	'usage_reminder_email',
 	'daily_passdown_email',
+	'reservation_cancelled_user_email',
+	'reservation_created_user_email',
 ]
 
 
@@ -106,6 +109,7 @@ def customize(request, element):
 	elif element == 'application_settings':
 		set_customization('self_log_in', request.POST.get('self_log_in', ''))
 		set_customization('facility_name', request.POST.get('facility_name', ''))
+		set_customization('self_log_out', request.POST.get('self_log_out', ''))
 	else:
 		return HttpResponseBadRequest('Invalid customization')
 	return redirect('customization')

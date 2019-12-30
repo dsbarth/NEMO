@@ -5,7 +5,12 @@ from django.contrib.admin.widgets import FilteredSelectMultiple
 from django.contrib.auth.models import Permission
 
 from NEMO.actions import lock_selected_interlocks, synchronize_with_tool_usage, unlock_selected_interlocks
-from NEMO.models import Account, ActivityHistory, Alert, Area, AreaAccessRecord, ChemicalRequest, Comment, Configuration, ConfigurationHistory, Consumable, ConsumableCategory, ConsumableWithdraw, ContactInformation, ContactInformationCategory, Customization, Door, Interlock, InterlockCard, LandingPageChoice, MembershipHistory, News, Notification, PhysicalAccessLevel, PhysicalAccessLog, Project, Reservation, Resource, ResourceCategory, SafetyIssue, ScheduledOutage, ScheduledOutageCategory, Sensor, StockroomItem, StockroomWithdraw, StockroomCategory, StaffCharge, Task, TaskCategory, TaskHistory, TaskStatus, Tool, TrainingSession, UsageEvent, User, UserChemical, UserType
+from NEMO.models import Account, ActivityHistory, Alert, Area, AreaAccessRecord, ChemicalRequest, Comment, Configuration, \
+	ConfigurationHistory, Consumable, ConsumableCategory, ConsumableWithdraw, ContactInformation, \
+	ContactInformationCategory, Customization, Door, Interlock, InterlockCard, LandingPageChoice, MembershipHistory, \
+	News, Notification, PhysicalAccessLevel, PhysicalAccessLog, Project, Reservation, Resource, ResourceCategory, \
+	SafetyIssue, ScheduledOutage, ScheduledOutageCategory, Sensor, StockroomItem, StockroomWithdraw, StockroomCategory, StaffCharge, Task, TaskCategory, TaskHistory, TaskStatus, \
+	Tool, TrainingSession, UsageEvent, User, UserChemical, UserType, UserPreferences, TaskImages
 
 admin.site.site_header = "NEMO"
 admin.site.site_title = "NEMO"
@@ -149,6 +154,18 @@ class ToolAdminForm(forms.ModelForm):
 			self.fields['nonrequired_resources'].initial = self.instance.nonrequired_resource_set.all()
 
 
+	def clean(self):
+		cleaned_data = super().clean()
+		policy_off_between_times = cleaned_data.get("policy_off_between_times")
+		policy_off_start_time = cleaned_data.get("policy_off_start_time")
+		policy_off_end_time = cleaned_data.get("policy_off_end_time")
+		if policy_off_between_times and (not policy_off_start_time or not policy_off_end_time):
+			if not policy_off_start_time:
+				self.add_error("policy_off_start_time", "Start time must be specified")
+			if not policy_off_end_time:
+				self.add_error("policy_off_end_time", "End time must be specified")
+
+
 @register(Tool)
 class ToolAdmin(admin.ModelAdmin):
 	list_display = ('name', 'category', 'visible', 'operational', 'problematic', 'is_configurable')
@@ -158,7 +175,9 @@ class ToolAdmin(admin.ModelAdmin):
 		(None, {'fields': ('name', 'category', 'qualified_users', 'post_usage_questions'),}),
 		('Current state', {'fields': ('visible', 'operational'),}),
 		('Contact information', {'fields': ('primary_owner', 'backup_owners', 'notification_email_address', 'location', 'phone_number'),}),
-		('Usage policy', {'fields': ('reservation_horizon', 'minimum_usage_block_time', 'maximum_usage_block_time', 'maximum_reservations_per_day', 'minimum_time_between_reservations', 'maximum_future_reservation_time', 'missed_reservation_threshold', 'requires_area_access', 'grant_physical_access_level_upon_qualification', 'grant_badge_reader_access_upon_qualification', 'interlock', 'allow_delayed_logoff', 'reservation_required'),}),
+		('Reservation', {'fields': ('reservation_horizon', 'missed_reservation_threshold'),}),
+		('Usage policy', {'fields': ('policy_off_between_times', 'policy_off_start_time', 'policy_off_end_time', 'policy_off_weekend', 'minimum_usage_block_time', 'maximum_usage_block_time', 'maximum_reservations_per_day', 'minimum_time_between_reservations', 'maximum_future_reservation_time',),}),
+		('Area Access', {'fields': ('requires_area_access', 'grant_physical_access_level_upon_qualification', 'grant_badge_reader_access_upon_qualification', 'interlock', 'allow_delayed_logoff', 'reservation_required'),}),
 		('Dependencies', {'fields': ('required_resources', 'nonrequired_resources'),}),
 	)
 
@@ -358,6 +377,16 @@ class TaskHistoryAdmin(admin.ModelAdmin):
 	date_hierarchy = 'time'
 
 
+@register(TaskImages)
+class TaskImagesAdmin(admin.ModelAdmin):
+	list_display = ('id', 'get_tool', 'task', 'uploaded_at')
+
+	def get_tool(self, task_image: TaskImages):
+		return task_image.task.tool.name
+	get_tool.admin_order_field = 'tool'  # Allows column order sorting
+	get_tool.short_description = 'Tool Name'  # Renames column head
+
+
 @register(Comment)
 class CommentAdmin(admin.ModelAdmin):
 	list_display = ('id', 'tool', 'author', 'creation_date', 'expiration_date', 'visible', 'hidden_by', 'hide_date')
@@ -388,6 +417,11 @@ class MembershipHistoryAdmin(admin.ModelAdmin):
 @register(UserType)
 class UserTypeAdmin(admin.ModelAdmin):
 	list_display = ('name', 'daily_rate', 'staff_rate')
+
+
+@register(UserPreferences)
+class UserPreferencesAdmin(admin.ModelAdmin):
+	list_display = ('user',)
 
 
 @register(User)

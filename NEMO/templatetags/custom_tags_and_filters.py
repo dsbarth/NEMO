@@ -6,6 +6,7 @@ from django.urls import reverse, NoReverseMatch
 from django.utils import timezone
 from django.utils.html import escape, format_html
 from django.utils.safestring import mark_safe
+from pkg_resources import get_distribution, DistributionNotFound
 
 register = template.Library()
 
@@ -45,8 +46,8 @@ def json_search_base_with_extra_fields(items_to_search, *extra_fields):
 	"""
 	result = '['
 	for item in items_to_search:
-		object_type = ContentType.objects.get_for_model(item).name
-		result += '{{"name":"{0}", "id":{1}, "type":"{2}"'.format(escape(str(item)), item.id, object_type)
+		object_type = item.__class__.__name__.lower()
+		result += '{{"name":"{0}", "id":"{1}", "type":"{2}"'.format(escape(str(item)), item.id, object_type)
 		for x in extra_fields:
 			if hasattr(item, x):
 				result += ', "{0}":"{1}"'.format(x, getattr(item, x))
@@ -66,3 +67,21 @@ def navigation_url(url_name, description):
 @register.filter
 def get_item(dictionary, key):
 	return dictionary.get(key)
+
+
+dist_version: str = '0'
+
+
+@register.simple_tag()
+def app_version() -> str:
+	global dist_version
+	if dist_version != '0':
+		return dist_version
+	else:
+		try:
+			dist_version = get_distribution("NEMO").version
+		except DistributionNotFound:
+			# package is not installed
+			dist_version = None
+			pass
+	return dist_version

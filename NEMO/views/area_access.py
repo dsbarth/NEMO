@@ -10,7 +10,7 @@ from django.utils import timezone
 from django.utils.http import urlencode
 from django.views.decorators.http import require_GET, require_POST, require_http_methods
 
-from NEMO.models import Area, AreaAccessRecord, Door, PhysicalAccessLog, PhysicalAccessType, Project, User
+from NEMO.models import Area, AreaAccessRecord, Door, PhysicalAccessLog, PhysicalAccessType, Project, User, UsageEvent
 from NEMO.tasks import postpone
 from NEMO.utilities import parse_start_and_end_date
 from NEMO.views.customization import get_customization
@@ -137,7 +137,7 @@ def login_to_area(request, door_id):
 		record.customer = user
 		record.project = user.active_projects()[0]
 		record.save()
-		unlock_door(door)
+		unlock_door(door.id)
 		return render(request, 'area_access/login_success.html', {'area': door.area, 'name': user.first_name, 'project': record.project, 'previous_area': previous_area})
 	elif user.active_project_count() > 1:
 		project_id = request.POST.get('project_id')
@@ -163,7 +163,7 @@ def login_to_area(request, door_id):
 			record.customer = user
 			record.project = project
 			record.save()
-			unlock_door(door)
+			unlock_door(door.id)
 			return render(request, 'area_access/login_success.html', {'area': door.area, 'name': user.first_name, 'project': record.project, 'previous_area': previous_area})
 		else:
 			# No log entry necessary here because all validation checks passed, and the user must indicate which project
@@ -172,11 +172,11 @@ def login_to_area(request, door_id):
 
 
 @postpone
-def unlock_door(door):
+def unlock_door(door_id):
+	door = Door.objects.get(id=door_id)
 	door.interlock.unlock()
 	sleep(8)
 	door.interlock.lock()
-	sleep(3)
 
 
 @login_required
@@ -193,7 +193,11 @@ def logout_of_area(request, door_id):
 	if record:
 		record.end = timezone.now()
 		record.save()
-		return render(request, 'area_access/logout_success.html', {'area': record.area, 'name': user.first_name})
+		busy_tools = UsageEvent.objects.filter(end=None, user=user)
+		if busy_tools:
+			return render(request, 'area_access/logout_warning.html', {'area': record.area, 'name': user.first_name, 'tools_in_use': busy_tools})
+		else:
+			return render(request, 'area_access/logout_success.html', {'area': record.area, 'name': user.first_name})
 	else:
 		return render(request, 'area_access/not_logged_in.html')
 
@@ -204,7 +208,7 @@ def force_area_logout(request, user_id):
 	user = get_object_or_404(User, id=user_id)
 	record = user.area_access_record()
 	if record is None:
-		return HttpResponseBadRequest('That user is not logged into the {}.'.format(record.area))
+		return HttpResponseBadRequest('That user is not logged into any areas.')
 	record.end = timezone.now()
 	record.save()
 	return HttpResponse()
@@ -224,7 +228,7 @@ def open_door(request, door_id):
 	if user.area_access_record() and user.area_access_record().area == door.area:
 		log = PhysicalAccessLog(user=user, door=door, time=timezone.now(), result=PhysicalAccessType.ALLOW, details="The user was permitted to enter this area, and already had an active area access record for this area.")
 		log.save()
-		unlock_door(door)
+		unlock_door(door.id)
 		return render(request, 'area_access/door_is_open.html')
 	return render(request, 'area_access/not_logged_in.html', {'area': door.area})
 
@@ -342,6 +346,33 @@ def self_log_in(request):
 		except:
 			pass
 		return redirect(reverse('landing'))
+
+
+@login_required
+@require_GET
+def self_log_out(request, user_id):
+	user = get_object_or_404(User, id=user_id)
+	if able_to_self_log_out_of_area(user):
+		record = user.area_access_record()
+		if record is None:
+			return HttpResponseBadRequest('You are not logged into any areas.')
+		record.end = timezone.now()
+		record.save()
+	return redirect(reverse('landing'))
+
+
+def able_to_self_log_out_of_area(user):
+	# 'Self log out' must be enabled
+	if not get_customization('self_log_out') == 'enabled':
+		return False
+	# Check if the user is active
+	if not user.is_active:
+		return False
+	# Check if the user is already in an area.
+	if not user.in_area():
+		return False
+	# Otherwise we are good to log out
+	return True
 
 
 def able_to_self_log_in_to_area(user):

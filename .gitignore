@@ -3,3 +3,4 @@ __pycache__/
 venv/
 settings.py
 fake_authentication.py
+NEMO/media

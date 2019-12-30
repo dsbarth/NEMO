@@ -1,11 +1,11 @@
 from datetime import datetime
 
 from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
-from django.forms import BaseForm, BooleanField, CharField, ChoiceField, DateField, Form, IntegerField, ModelChoiceField, ModelForm
+from django.forms import BaseForm, BooleanField, CharField, ChoiceField, DateField, Form, IntegerField, ModelChoiceField, ModelForm, ImageField
 from django.forms.utils import ErrorDict
 from django.utils import timezone
 
-from NEMO.models import Account, Alert, ChemicalRequest, Comment, Consumable, ConsumableWithdraw, StockroomItem, StockroomWithdraw, Project, SafetyIssue, ScheduledOutage, Task, TaskCategory, User, UserChemical
+from NEMO.models import Account, Alert, ChemicalRequest, Comment, Consumable, ConsumableWithdraw, StockroomItem, StockroomWithdraw, Project, SafetyIssue, ScheduledOutage, Task, TaskCategory, User, UserChemical, UserPreferences, TaskImages
 from NEMO.utilities import bootstrap_primary_color, format_datetime
 
 
@@ -94,6 +94,13 @@ class TaskForm(ModelForm):
 				else:
 					instance.resolution_description = self.cleaned_data['description']
 		return super(TaskForm, self).save(commit=True)
+
+
+class TaskImagesForm(ModelForm):
+	image = ImageField(label='Images', required=False)
+	class Meta:
+		model = TaskImages
+		fields = ('image', )
 
 
 class CommentForm(ModelForm):
@@ -349,6 +356,12 @@ class UserChemicalUpdateForm(ModelForm):
 	class Meta:
 		model = UserChemical
 		fields = ['owner', 'label_id', 'expiration', 'location']
+
+class UserPreferencesForm(ModelForm):
+	class Meta:
+		model = UserPreferences
+		fields = ['attach_created_reservation', 'attach_cancelled_reservation']
+
 
 def nice_errors(form, non_field_msg='General form errors'):
 	result = ErrorDict()

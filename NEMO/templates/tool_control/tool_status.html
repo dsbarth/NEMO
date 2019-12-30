@@ -85,6 +85,15 @@
 		{% if next_res %}
 			The next reservation is at {{ next_res.start|date:"g:i A"}} by <a href="{% url 'get_email_form_for_user' next_res.user.id %}"> {{ next_res.user }} </a>
 		{% endif %}
+
+		{% if tool_rate %}
+			<div>
+				{% autoescape off %}
+					{{ tool_rate }}
+				{% endautoescape %}
+			</div>
+		{% endif %}
+
 		{# Display any unavailable required resources... #}
 		{% for r in tool.unavailable_required_resources %}
 			<div class="media">
@@ -145,6 +154,15 @@
 									<h4 class="media-heading">Progress updates</h4>
 									{{ t.progress_description|linebreaksbr }}
 								</div>
+							</div>
+						{% endif %}
+						{% if t.task_images %}
+							<div>images:
+								<ul>
+									{% for image in t.task_images %}
+										<li><a href="{{ image.image.url }}" target="_blank" style="margin-right: 5px">{{ image.filename }}</a></li>
+									{% endfor %}
+								</ul>
 							</div>
 						{% endif %}
 					</div>
@@ -342,7 +360,7 @@
 	</div>
 
 	<div class="tab-pane" id="problem">
-		<form action="{% url 'create_task' %}" method="post">
+		<form action="{% url 'create_task' %}" method="post" enctype="multipart/form-data">
 			{% csrf_token %}
 			<input type="hidden" name="action" value="create">
 			<input type="hidden" name="tool" value="{{ tool.id }}">
@@ -394,6 +412,9 @@
 			<div class="form-group">
 				<div class="checkbox"><label><input name="safety_hazard" type="checkbox"/>This problem represents a safety hazard to the {{ facility_name }} and should be regarded as urgent. Notify the {{ facility_name }} safety officer of this issue.</label></div>
 				<div class="checkbox"><label><input name="force_shutdown" type="checkbox"/>Shut down the tool so that it may not be used until this problem is resolved.</label></div>
+			</div>
+			<div class="form-group">
+				<input id="fileupload" type="file" name="image" multiple>
 			</div>
 			<div class="form-group">
 				<button type="submit" class="btn btn-danger">Report problem</button>

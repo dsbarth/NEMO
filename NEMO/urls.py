@@ -107,6 +107,7 @@ urlpatterns = [
 
 	# Status dashboard:
 	url(r'^status_dashboard/$', status_dashboard.status_dashboard, name='status_dashboard'),
+	url(r'^status_dashboard/(?P<tab>tools|occupancy)/$', status_dashboard.status_dashboard, name='status_dashboard_tab'),
 
 	# Jumbotron:
 	url(r'^jumbotron/$', jumbotron.jumbotron, name='jumbotron'),
@@ -190,10 +191,11 @@ urlpatterns = [
 	url(r'^change_project/(?P<new_project>\d+)/$', area_access.change_project, name='change_project'),
 	url(r'^force_area_logout/(?P<user_id>\d+)/$', area_access.force_area_logout, name='force_area_logout'),
 	url(r'^self_log_in/$', area_access.self_log_in, name='self_log_in'),
+	url(r'^self_log_out/(?P<user_id>\d+)$', area_access.self_log_out, name='self_log_out'),
 
 	# NanoFab usage:
 	url(r'^usage/$', usage.usage, name='usage'),
-	url(r'^billing_information/(?P<timeframe>((January|February|March|April|May|June|July|August|September|October|November|December), 20\d\d))/$', usage.billing_information, name='billing_information'),
+	url(r'^usage_billing/$', usage.billing, name='usage_billing'),
 
 	# Alerts:
 	url(r'^alerts/$', alerts.alerts, name='alerts'),
@@ -215,12 +217,16 @@ urlpatterns = [
 
 	# Media
 	url(r'^media/(?P<path>.*)$', serve, {'document_root': settings.MEDIA_ROOT}, name='media'),
+
+	# User Preferences
+	url(r'^user_preferences/$', users.user_preferences, name='user_preferences')
 ]
 
 if settings.ALLOW_CONDITIONAL_URLS:
 	urlpatterns += [
 		url(r'^admin/', include(admin.site.urls)),
 		url(r'^api/', include(router.urls)),
+		url(r'^api/billing/?$', api.billing),
 
 		# Tablet area access
 		url(r'^welcome_screen/(?P<door_id>\d+)/$', area_access.welcome_screen, name='welcome_screen'),
@@ -287,6 +293,10 @@ if settings.ALLOW_CONDITIONAL_URLS:
 		# Site customization:
 		url(r'^customization/$', customization.customization, name='customization'),
 		url(r'^customize/(?P<element>.+)/$', customization.customize, name='customize'),
+
+		# Project Usage:
+		url(r'^project_usage/$', usage.project_usage, name='project_usage'),
+		url(r'^project_billing/$', usage.project_billing, name='project_billing'),
 	]
 
 if settings.DEBUG:

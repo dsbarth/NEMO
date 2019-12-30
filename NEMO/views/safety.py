@@ -1,6 +1,5 @@
 from django.contrib.admin.views.decorators import staff_member_required
 from django.contrib.auth.decorators import login_required
-from django.core.mail import send_mail
 from django.http import HttpResponseRedirect
 from django.shortcuts import get_object_or_404, render
 from django.template import Context, Template
@@ -10,6 +9,7 @@ from django.utils import timezone
 
 from NEMO.forms import SafetyIssueCreationForm, SafetyIssueUpdateForm
 from NEMO.models import SafetyIssue, Alert
+from NEMO.utilities import send_mail
 from NEMO.views.customization import get_media_file_contents, get_customization
 from NEMO.views.alerts import send_alert_emails
 from NEMO.views.notifications import create_safety_notification, delete_safety_notification, get_notifications
@@ -66,7 +66,7 @@ def send_safety_email_notification(request, issue):
 		return
 	rendered_message = Template(message).render(Context(dictionary))
 	from_email = issue.reporter.email if issue.reporter else recipient
-	send_mail(subject, '', from_email, [recipient], html_message=rendered_message)
+	send_mail(subject, rendered_message, from_email, [recipient])
 
 
 @login_required

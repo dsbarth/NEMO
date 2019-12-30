@@ -1,12 +1,14 @@
+import io
+from collections import Iterable
 from datetime import timedelta, datetime
 from http import HTTPStatus
 from re import match
 from pandas import DataFrame, to_numeric
 from dateutil import relativedelta
 
+from dateutil import rrule
 from django.contrib.admin.views.decorators import staff_member_required
 from django.contrib.auth.decorators import login_required, permission_required
-from django.core.mail import send_mail
 from django.db.models import Q
 from django.http import HttpResponseBadRequest, HttpResponse, HttpResponseNotFound
 from django.shortcuts import render, get_object_or_404, redirect
@@ -16,13 +18,30 @@ from django.views.decorators.http import require_GET, require_POST
 
 from NEMO.decorators import disable_session_expiry_refresh
 from NEMO.models import Tool, Reservation, Configuration, UsageEvent, AreaAccessRecord, StaffCharge, User, Project, Account, ScheduledOutage, ScheduledOutageCategory, Task, StockroomItem, Consumable, SafetyIssue, ChemicalRequest
-from NEMO.utilities import bootstrap_primary_color, extract_times, extract_dates, format_datetime, parse_parameter_string, get_month_timeframe
+from NEMO.utilities import bootstrap_primary_color, extract_times, extract_dates, format_datetime, parse_parameter_string, send_mail, create_email_attachment, localize, get_month_timeframe
 from NEMO.views.constants import ADDITIONAL_INFORMATION_MAXIMUM_LENGTH
 from NEMO.views.customization import get_customization, get_media_file_contents
 from NEMO.views.policy import check_policy_to_save_reservation, check_policy_to_cancel_reservation, check_policy_to_create_outage
 from NEMO.views.billing import get_billing_data
 from NEMO.views.status_dashboard import create_tool_summary
 from NEMO.widgets.tool_tree import ToolTree
+
+
+recurrence_frequency_display = {
+	'DAILY': 'Day(s)',
+	'DAILY_WEEKDAYS':'Week Day(s)',
+	'DAILY WEEKENDS':'Weekend Day(s)',
+	'WEEKLY':'Week(s)',
+	'MONTHLY':'Month(s)',
+}
+
+recurrence_frequencies = {
+	'DAILY': rrule.DAILY,
+	'DAILY_WEEKDAYS': rrule.DAILY,
+	'DAILY WEEKENDS': rrule.DAILY,
+	'WEEKLY': rrule.WEEKLY,
+	'MONTHLY': rrule.MONTHLY,
+}
 
 @login_required
 @require_GET
@@ -36,7 +55,7 @@ def calendar(request, tool_id=None):
 			return redirect('choose_tool', 'view_calendar')
 
 	tools = Tool.objects.filter(visible=True).order_by('category', 'name')
-	rendered_tool_tree_html = ToolTree().render(None, {'tools': tools})
+	rendered_tool_tree_html = ToolTree().render(None, {'tools': tools, 'user': request.user})
 	tool_summary = create_tool_summary(request)
 	dictionary = {
 		'rendered_tool_tree_html': rendered_tool_tree_html,
@@ -245,7 +264,7 @@ def create_reservation(request):
 	configured = (request.POST.get('configured') == "true")
 	# If a reservation is requested and the tool does not require configuration...
 	if not tool.is_configurable():
-		new_reservation.save()
+		new_reservation.save_and_notify()
 		return HttpResponse()
 
 	# If a reservation is requested and the tool requires configuration that has not been submitted...
@@ -259,7 +278,7 @@ def create_reservation(request):
 		# Reservation can't be short notice if the user is configuring the tool themselves.
 		if new_reservation.self_configuration:
 			new_reservation.short_notice = False
-		new_reservation.save()
+		new_reservation.save_and_notify()
 		return HttpResponse()
 
 	return HttpResponseBadRequest("Reservation creation failed because invalid parameters were sent to the server.")
@@ -296,7 +315,7 @@ def parse_configuration_entry(key, value):
 @staff_member_required(login_url=None)
 @require_POST
 def create_outage(request):
-	""" Create a reservation for a user. """
+	""" Create an outage. """
 	try:
 		start, end = extract_times(request.POST)
 	except Exception as e:
@@ -317,13 +336,47 @@ def create_outage(request):
 
 	# Make sure there is at least an outage title
 	if not request.POST.get('title'):
-		dictionary = {'categories': ScheduledOutageCategory.objects.all()}
+		dictionary = {
+			'categories': ScheduledOutageCategory.objects.all(),
+			'recurrence_intervals': recurrence_frequency_display,
+			'recurrence_date_start': start.date(),
+		}
 		return render(request, 'calendar/scheduled_outage_information.html', dictionary)
 
 	outage.title = request.POST['title']
 	outage.details = request.POST.get('details', '')
 
-	outage.save()
+	if request.POST.get('recurring_outage') == 'on':
+		# we have to remove tz before creating rules otherwise 8am would become 7am after DST change.
+		start_no_tz = outage.start.replace(tzinfo=None)
+		end_no_tz = outage.end.replace(tzinfo=None)
+
+		submitted_frequency = request.POST.get('recurrence_frequency')
+		submitted_date_until = request.POST.get('recurrence_until', None)
+		date_until = end.replace(hour=0, minute=0, second=0)
+		if submitted_date_until:
+			date_until = localize(datetime.strptime(submitted_date_until, '%m/%d/%Y'))
+		date_until += timedelta(days=1, seconds=-1)
+		by_week_day = None
+		if submitted_frequency == 'DAILY_WEEKDAYS':
+			by_week_day = (rrule.MO, rrule.TU, rrule.WE, rrule.TH, rrule.FR)
+		elif submitted_frequency == 'DAILY_WEEKENDS':
+			by_week_day = (rrule.SA, rrule.SU)
+		frequency = recurrence_frequencies.get(submitted_frequency, rrule.DAILY)
+		rules: Iterable[datetime] = rrule.rrule(dtstart=start, freq=frequency, interval=int(request.POST.get('recurrence_interval',1)), until=date_until, byweekday=by_week_day)
+		for rule in list(rules):
+			recurring_outage = ScheduledOutage()
+			recurring_outage.creator = outage.creator
+			recurring_outage.category = outage.category
+			recurring_outage.tool = outage.tool
+			recurring_outage.title = outage.title
+			recurring_outage.details = outage.details
+			recurring_outage.start = localize(start_no_tz.replace(year=rule.year, month=rule.month, day=rule.day))
+			recurring_outage.end = localize(end_no_tz.replace(year=rule.year, month=rule.month, day=rule.day))
+			recurring_outage.save()
+	else:
+		outage.save()
+
 	return HttpResponse()
 
 
@@ -418,9 +471,9 @@ def modify_reservation(request, start_delta, end_delta):
 		return HttpResponseBadRequest(policy_problems[0])
 	else:
 		# All policy checks passed, so save the reservation.
-		new_reservation.save()
+		new_reservation.save_and_notify()
 		reservation_to_cancel.descendant = new_reservation
-		reservation_to_cancel.save()
+		reservation_to_cancel.save_and_notify()
 	return response
 
 
@@ -467,9 +520,10 @@ def cancel_reservation(request, reservation_id):
 		reservation.cancelled = True
 		reservation.cancellation_time = timezone.now()
 		reservation.cancelled_by = request.user
-		reservation.save()
 
 		if reason:
+			''' don't notify in this case since we are sending a specific email for the cancellation '''
+			reservation.save()
 			dictionary = {
 				'staff_member': request.user,
 				'reservation': reservation,
@@ -479,7 +533,15 @@ def cancel_reservation(request, reservation_id):
 			email_contents = get_media_file_contents('cancellation_email.html')
 			if email_contents:
 				cancellation_email = Template(email_contents).render(Context(dictionary))
-				reservation.user.email_user('Your reservation was cancelled', cancellation_email, request.user.email)
+				if getattr(reservation.user.preferences, 'attach_cancelled_reservation', False):
+					attachment = create_ics_for_reservation(reservation, cancelled=True)
+					reservation.user.email_user('Your reservation was cancelled', cancellation_email, request.user.email, [attachment])
+				else:
+					reservation.user.email_user('Your reservation was cancelled', cancellation_email, request.user.email)
+
+		else:
+			''' here the user cancelled his own reservation so notify him '''
+			reservation.save_and_notify()
 
 	if request.device == 'desktop':
 		return response
@@ -505,7 +567,7 @@ def cancel_outage(request, outage_id):
 @staff_member_required(login_url=None)
 @require_POST
 def set_reservation_title(request, reservation_id):
-	""" Cancel a reservation for a user. """
+	""" Change reservation title for a user. """
 	reservation = get_object_or_404(Reservation, id=reservation_id)
 	reservation.title = request.POST.get('title', '')[:reservation._meta.get_field('title').max_length]
 	reservation.save()
@@ -609,7 +671,7 @@ def email_usage_reminders(request):
 		subject = f"{facility_name} usage"
 		for user in aggregate.values():
 			rendered_message = Template(message).render(Context({'user': user}))
-			send_mail(subject, '', user_office_email, [user['email']], html_message=rendered_message)
+			send_mail(subject, rendered_message, user_office_email, [user['email']])
 
 	message = get_media_file_contents('staff_charge_reminder_email.html')
 	if message:
@@ -796,4 +858,43 @@ def send_missed_reservation_notification(reservation):
 	message = Template(message).render(Context({'reservation': reservation}))
 	user_office_email = get_customization('user_office_email_address')
 	abuse_email = get_customization('abuse_email_address')
-	send_mail(subject, '', user_office_email, [reservation.user.email, abuse_email, user_office_email], html_message=message)
+	send_mail(subject, message, user_office_email, [reservation.user.email, abuse_email, user_office_email])
+
+
+def send_user_created_reservation_notification(reservation: Reservation):
+	if getattr(reservation.user.preferences, 'attach_created_reservation', False):
+		subject = "[NEMO] Reservation for the " + str(reservation.tool)
+		message = get_media_file_contents('reservation_created_user_email.html')
+		message = Template(message).render(Context({'reservation': reservation}))
+		user_office_email = get_customization('user_office_email_address')
+		attachment = create_ics_for_reservation(reservation)
+		reservation.user.email_user(subject, message, user_office_email, [attachment])
+
+
+def send_user_cancelled_reservation_notification(reservation: Reservation):
+	if getattr(reservation.user.preferences, 'attach_cancelled_reservation', False):
+		subject = "[NEMO] Cancelled Reservation for the " + str(reservation.tool)
+		message = get_media_file_contents('reservation_cancelled_user_email.html')
+		message = Template(message).render(Context({'reservation': reservation}))
+		user_office_email = get_customization('user_office_email_address')
+		attachment = create_ics_for_reservation(reservation, cancelled=True)
+		reservation.user.email_user(subject, message, user_office_email, [attachment])
+
+
+def create_ics_for_reservation(reservation: Reservation, cancelled=False):
+	method = 'METHOD:CANCEL\n' if cancelled else 'METHOD:PUBLISH\n'
+	status = 'STATUS:CANCELLED\n' if cancelled else 'STATUS:CONFIRMED\n'
+	uid = 'UID:'+str(reservation.id)+'\n'
+	sequence = 'SEQUENCE:2\n' if cancelled else 'SEQUENCE:0\n'
+	priority = 'PRIORITY:5\n' if cancelled else 'PRIORITY:0\n'
+	now = datetime.now().strftime('%Y%m%dT%H%M%S')
+	start = reservation.start.astimezone(timezone.get_current_timezone()).strftime('%Y%m%dT%H%M%S')
+	end = reservation.end.astimezone(timezone.get_current_timezone()).strftime('%Y%m%dT%H%M%S')
+	lines = ['BEGIN:VCALENDAR\n', 'VERSION:2.0\n', method, 'BEGIN:VEVENT\n', uid, sequence, priority, f'DTSTAMP:{now}\n', f'DTSTART:{start}\n', f'DTEND:{end}\n', f'SUMMARY:[NEMO] {reservation.tool.name} Reservation\n', status, 'END:VEVENT\n', 'END:VCALENDAR\n']
+	ics = io.StringIO('')
+	ics.writelines(lines)
+	ics.seek(0)
+
+	filename = 'cancelled_nemo_reservation.ics' if cancelled else 'nemo_reservation.ics'
+
+	return create_email_attachment(ics, filename)

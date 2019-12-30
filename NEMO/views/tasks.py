@@ -1,21 +1,26 @@
 from smtplib import SMTPException
 from textwrap import dedent
+from logging import getLogger
+from typing import List
 
 from django.conf import settings
 from django.contrib.admin.views.decorators import staff_member_required
 from django.contrib.auth.decorators import login_required
-from django.core.mail import send_mail, EmailMultiAlternatives
-from django.shortcuts import get_object_or_404, render, redirect
-from django.template import Template, Context
+from django.core.mail import EmailMultiAlternatives
+from django.core.files.base import ContentFile
+from django.shortcuts import get_object_or_404, redirect, render
+from django.template import Context, Template
 from django.utils import timezone
 from django.views.decorators.http import require_GET, require_POST
 
-from NEMO.forms import TaskForm, nice_errors
-from NEMO.models import Task, UsageEvent, Interlock, TaskCategory, Reservation, SafetyIssue, TaskStatus, TaskHistory, User
-from NEMO.utilities import bootstrap_primary_color, format_datetime
+from NEMO.forms import TaskForm, nice_errors, TaskImagesForm
+from NEMO.models import Interlock, Reservation, SafetyIssue, Task, TaskCategory, TaskHistory, TaskStatus, UsageEvent, TaskImages, User
+from NEMO.utilities import bootstrap_primary_color, format_datetime, send_mail, create_email_attachment, resize_image
 from NEMO.views.customization import get_customization, get_media_file_contents
 from NEMO.views.safety import send_safety_email_notification
 from NEMO.views.tool_control import determine_tool_status
+
+tasks_logger = getLogger("NEMO.Tasks")
 
 
 @login_required
@@ -24,15 +29,19 @@ def create(request):
 	"""
 	This function handles feedback from users. This could be a problem report or shutdown notification.
 	"""
+	images_form = TaskImagesForm(request.POST, request.FILES)
 	form = TaskForm(request.user, data=request.POST)
-	if not form.is_valid():
+	if not form.is_valid() or not images_form.is_valid():
+		errors = nice_errors(form)
+		errors.update(nice_errors(images_form))
 		dictionary = {
 			'title': 'Task creation failed',
 			'heading': 'Something went wrong while reporting the problem',
-			'content': nice_errors(form).as_ul(),
+			'content': errors.as_ul(),
 		}
 		return render(request, 'acknowledgement.html', dictionary)
 	task = form.save()
+	task_images = save_task_images(request, task)
 
 	if not settings.ALLOW_CONDITIONAL_URLS and task.force_shutdown:
 		dictionary = {
@@ -61,13 +70,16 @@ def create(request):
 		issue = SafetyIssue.objects.create(reporter=request.user, location=task.tool.location, concern=concern)
 		send_safety_email_notification(request, issue)
 
-	send_new_task_emails(request, task)
+	send_new_task_emails(request, task, task_images)
 	set_task_status(request, task, request.POST.get('status'), request.user)
 	return redirect('tool_control')
 
 
-def send_new_task_emails(request, task):
+def send_new_task_emails(request, task: Task, task_images: List[TaskImages]):
 	message = get_media_file_contents('new_task_email.html')
+	attachments = None
+	if task_images:
+		attachments = [create_email_attachment(task_image.image, task_image.image.name) for task_image in task_images]
 	if message:
 		dictionary = {
 			'template_color': bootstrap_primary_color('danger') if task.force_shutdown else bootstrap_primary_color('warning'),
@@ -80,7 +92,7 @@ def send_new_task_emails(request, task):
 		subject = ('SAFETY HAZARD: ' if task.safety_hazard else '') + task.tool.name + (' shutdown' if task.force_shutdown else ' problem')
 		message = Template(message).render(Context(dictionary))
 		recipients = tuple([r for r in [task.tool.primary_owner.email, *task.tool.backup_owners.all().values_list('email', flat=True), task.tool.notification_email_address] if r])
-		send_mail(subject, '', request.user.email, recipients, html_message=message)
+		send_mail(subject, message, request.user.email, recipients, attachments)
 
 	# Send an email to all users (excluding staff) qualified on the tool:
 	user_office_email = get_customization('user_office_email_address')
@@ -188,56 +200,64 @@ def cancel(request, task_id):
 	return redirect('tool_control')
 
 
-def micromanage(task, url):
-	# If there's no micromanager present, let the techs do their job and leave them alone...
-	if not hasattr(settings, 'MICROMANAGER'):
+def send_task_updated_email(task, url, task_images: List[TaskImages]):
+	if not hasattr(settings, 'LAB_MANAGERS'):
 		return
-
-	# Otherwise, let the micromanagement begin...
+	attachments = None
+	if task_images:
+		attachments = [create_email_attachment(task_image.image, task_image.image.name) for task_image in task_images]
 	task.refresh_from_db()
 	if task.resolved:
-		subject = f'{task.tool} task resolved'
+		task_user = task.resolver
+		task_status = 'resolved'
 	else:
-		subject = f'{task.tool} task updated'
+		task_user = task.last_updated_by
+		task_status = 'updated'
 	message = f"""
-A task for the {task.tool} was just modified by {task.last_updated_by}.
-
+A task for the {task.tool} was just modified by {task_user}.
+<br/><br/>
 The latest update is at the bottom of the description. The entirety of the task status follows:
-
-Task problem description:
+<br/><br/>
+Task problem description:<br/>
 {task.problem_description}
-
-Task progress description:
+<br/><br/>
+Task progress description:<br/>
 {task.progress_description}
-
-Task resolution description:
+<br/><br/>
+Task resolution description:<br/>
 {task.resolution_description}
-
-Visit {url} to view the tool control page for the task.
+<br/><br/>
+Visit {url} to view the tool control page for the task.<br/>
 """
-	send_mail(subject, message, settings.SERVER_EMAIL, settings.MICROMANAGER)
+	send_mail(f'{task.tool} task {task_status}', message, settings.SERVER_EMAIL, settings.LAB_MANAGERS, attachments)
 
 
 @staff_member_required(login_url=None)
 @require_POST
 def update(request, task_id):
 	task = get_object_or_404(Task, id=task_id)
+	images_form = TaskImagesForm(request.POST, request.FILES)
 	form = TaskForm(request.user, data=request.POST, instance=task)
 	next_page = request.POST.get('next_page', 'tool_control')
-	if not form.is_valid():
+	if not form.is_valid() or not images_form.is_valid():
+		errors = nice_errors(form)
+		errors.update(nice_errors(images_form))
 		dictionary = {
 			'title': 'Task update failed',
 			'heading': 'Invalid task form data',
-			'content': str(form.errors),
+			'content': errors.as_ul(),
 		}
 		return render(request, 'acknowledgement.html', dictionary)
 	form.save()
 	set_task_status(request, task, request.POST.get('status'), request.user)
 	determine_tool_status(task.tool)
 	send_task_update_emails(request, task)
+	task_images = save_task_images(request, task)
 	try:
-		micromanage(task, request.build_absolute_uri(task.tool.get_absolute_url()))
-	except:
+		send_task_updated_email(task, request.build_absolute_uri(task.tool.get_absolute_url()), task_images)
+	except Exception as error:
+		error_message = 'NEMO was unable to send the task updated email. The error message that NEMO received is: ' + str(error)
+		tasks_logger.exception(error_message)
 		pass
 	if next_page == 'maintenance':
 		return redirect('maintenance')
@@ -310,4 +330,20 @@ def set_task_status(request, task, status_name, user):
 	if status.notify_backup_tool_owners:
 		recipients += task.tool.backup_tool_owners.values_list('email')
 	recipients = filter(None, recipients)
-	send_mail(subject, '', user.email, recipients, html_message=message)
+	send_mail(subject, message, user.email, recipients)
+
+
+def save_task_images(request, task: Task) -> List[TaskImages]:
+	task_images: List[TaskImages] = []
+	try:
+		images_form = TaskImagesForm(request.POST, request.FILES)
+		if images_form.is_valid() and images_form.cleaned_data['image'] is not None:
+			for image_memory_file in request.FILES.getlist('image'):
+				resized_image = resize_image(image_memory_file, 350)
+				image = TaskImages(task=task)
+				image.image.save(resized_image.name, ContentFile(resized_image.read()), save=False)
+				image.save()
+				task_images.append(image)
+	except Exception as e:
+		tasks_logger.exception(e)
+	return task_images

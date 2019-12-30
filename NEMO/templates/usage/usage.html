@@ -1,39 +1,20 @@
-{% extends 'base.html' %}
-{% block title %}Usage and billing information{% endblock %}
-{% block content %}
-	<h1>Usage and billing information
-		<small> for {{ timeframe }}</small>
-	</h1>
-	<p>
-		This page presents a monthly report of your billable {{ facility_name }} usage. <span style="color:red; font-weight:bold">It does not include adjustments requested from the {{ facility_name }} staff.</span>
-		All adjustments and finalized costs can be found on your monthly invoice.
-	</p>
-	<form class="form-inline" role="form">
-		<div class="form-group">
-			<label class="control-label">View information for
-				<select name="timeframe" class="form-control">
-					{% for month in month_list %}
-						<option {% if timeframe == month|date:"F, Y" %}selected{% endif %}>{{ month|date:"F, Y" }}</option>
-					{% endfor %}
-				</select>
-			</label>
-		</div>
-		<div class="form-group">
-			<input type="submit" class="btn btn-default" value="Update">
-		</div>
-	</form>
-
+{% extends 'usage/usage_base.html' %}
+{% block usage_content %}
 	<div style="margin-top:10px">
 		<ul class="nav nav-pills" id="tabs">
-			<li class="active"><a href="#usage">Usage</a></li>
-			<li><a href="#billing_information">Billing information</a></li>
+			<li class="active"><a>Usage</a></li>
+			<li><a href="{{ tab_url }}">Billing Information</a></li>
 		</ul>
 	</div>
 
 	<div id="content" class="tab-content">
 		<div class="tab-pane active" id="usage">
+			<br/>
+			<p>
+				Adjustment activities <b>are not included</b> in the usage information.
+			</p>
 			{% if no_charges %}
-				<h3>There was no usage for {{ timeframe }}.</h3>
+				<h3>There was no usage between {{ start_date|date:"F jS, Y" }} and {{ end_date|date:"F jS, Y" }}.</h3>
 			{% endif %}
 			{% if missed_reservations %}
 				<h3>Missed reservations</h3>
@@ -100,27 +81,5 @@
 				{% endfor %}
 			{% endif %}
 		</div>
-		<div class="tab-pane" id="billing_information">
-			Loading billing information...
-		</div>
 	</div>
-
-	<script>
-		function on_load()
-		{
-			$("#tabs a").click(switch_tab);
-			ajax_get('{% url 'billing_information' timeframe %}', undefined, display_billing_information, display_error_message);
-		}
-		$(on_load);
-
-		function display_billing_information(response, status, xml_http_request)
-		{
-			$('#billing_information').html(response);
-		}
-		function display_error_message()
-		{
-			$('#billing_information').html('There was a problem communicating with the billing service. The financial information associated with your usage cannot be displayed at this time.');
-		}
-	</script>
-
 {% endblock %}

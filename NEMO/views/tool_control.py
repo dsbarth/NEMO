@@ -12,7 +12,8 @@ from django.shortcuts import render, get_object_or_404, redirect
 from django.utils import timezone
 from django.views.decorators.http import logger, require_GET, require_POST
 
-from NEMO.forms import nice_errors, CommentForm
+from NEMO import rates
+from NEMO.forms import CommentForm, nice_errors
 from NEMO.models import Comment, Configuration, ConfigurationHistory, Project, Reservation, StaffCharge, Task, TaskCategory, TaskStatus, Tool, UsageEvent, User
 from NEMO.utilities import quiet_int, extract_times
 from NEMO.views.policy import check_policy_to_enable_tool, check_policy_to_disable_tool
@@ -36,7 +37,7 @@ def tool_control(request, tool_id=None):
 	}
 	# The tool-choice sidebar only needs to be rendered for desktop devices, not mobile devices.
 	if request.device == 'desktop':
-		dictionary['rendered_tool_tree_html'] = ToolTree().render(None, {'tools': tools})
+		dictionary['rendered_tool_tree_html'] = ToolTree().render(None, {'tools': tools, 'user':request.user})
 	return render(request, 'tool_control/tool_control.html', dictionary)
 
 
@@ -51,6 +52,7 @@ def tool_status(request, tool_id):
 		projects_to_exclude = [int(s) for s in exclude.split() if s.isdigit()]
 	dictionary = {
 		'tool': tool,
+		'tool_rate': rates.rate_class.get_tool_rate(tool),
 		'task_categories': TaskCategory.objects.filter(stage=TaskCategory.Stage.INITIAL_ASSESSMENT),
 		'rendered_configuration_html': tool.configuration_widget(request.user),
 		'mobile': request.device == 'mobile',

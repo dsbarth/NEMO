@@ -15,6 +15,7 @@ from NEMO.views.calendar import determine_insufficient_notice, extract_configura
 from NEMO.views.policy import check_policy_to_disable_tool, check_policy_to_enable_tool, \
 	check_policy_to_save_reservation
 from NEMO.views.status_dashboard import create_tool_summary
+from NEMO.views.customization import get_customization
 from NEMO.widgets.dynamic_form import DynamicForm
 
 
@@ -235,12 +236,18 @@ def category_choices(request, category, user_id):
 def tool_information(request, tool_id, user_id, back):
 	tool = Tool.objects.get(id=tool_id, visible=True)
 	customer = User.objects.get(id=user_id)
+	exclude=get_customization('exclude_from_usage')
+	projects_to_exclude=[]
+	if exclude:
+		projects_to_exclude = [int(s) for s in exclude.split() if s.isdigit()]
+	active_projects = customer.active_projects().exclude(id__in=projects_to_exclude)
 	dictionary = {
 		'customer': customer,
 		'tool': tool,
 		'rendered_configuration_html': tool.configuration_widget(customer),
 		'post_usage_questions': DynamicForm(tool.post_usage_questions).render(),
 		'back': back,
+		'active_projects': active_projects,
 	}
 	try:
 		current_reservation = Reservation.objects.get(start__lt=timezone.now(), end__gt=timezone.now(), cancelled=False, missed=False, shortened=False, user=customer, tool=tool)

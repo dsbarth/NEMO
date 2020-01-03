@@ -8,6 +8,7 @@ from django.urls import reverse
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_time
 from django.views.decorators.http import require_GET, require_POST
+from django.http import HttpResponse, HttpResponseBadRequest
 
 from NEMO.models import Project, Reservation, Tool, UsageEvent, User
 from NEMO.utilities import quiet_int, localize
@@ -30,7 +31,7 @@ def enable_tool(request):
 	response = check_policy_to_enable_tool(tool, operator=customer, user=customer, project=project, staff_charge=False)
 	if response.status_code != HTTPStatus.OK:
 		dictionary = {
-			'message': 'You are not authorized to enable this tool. {}'.format(response),
+			'message': 'You are not authorized to enable this tool. {}'.format(response.content.decode()),
 			'delay': 10,
 		}
 		return render(request, 'kiosk/acknowledgement.html', dictionary)

@@ -1,0 +1,110 @@
+{% extends 'base.html' %}
+{% load custom_tags_and_filters %}
+{% block title %}Add User Chemical{% endblock %}
+{% block extrahead %}
+	{% load static %}
+	<script type="text/javascript" src="{% static "datetimepicker/bootstrap-datetimepicker.js" %}"></script>
+	<link rel="stylesheet" type="text/css" href="{% static "datetimepicker/bootstrap-datetimepicker.css" %}"/>
+{% endblock %}
+{% block content %}
+	<h1>Update User Chemical in Inventory</h1>
+
+  <p>
+    Use this form to update user owned chemicals currently in the {{ facility_name }}.
+  </p>
+
+	<h3>Chemical Information</h3>
+
+	<form action="{% url 'delete_user_chemical' form.instance.id %}" method="post">
+		{% csrf_token %}
+		<div class="form-group">
+			<input type="submit" class="btn btn-danger" value="Delete User Chemical">
+		</div>
+	</form>
+
+	<form action="{% url 'update_user_chemical' form.instance.id %}" method="post">
+		{% csrf_token %}
+
+    <div class="form-group">
+      <label for="owner_search">Chemical Owner</label>
+      <div>
+        <input type="text" class="form-control" style="max-width:250px; display:none" id="owner_search" placeholder="Search for a labmember">
+        <input type="button" id="chosen_owner" class="btn btn-default" onclick="clear_selected_owner()" value="{{ owner }}">
+        <input type="hidden" id="owner" name="owner" value="{{ form.owner.value }}">
+      </div><br>
+      <label for="label_id">Label ID #</label>
+      <div><input type="text" name="label_id" class="form-control" style="max-width: 250px" label="Label ID" value="{{ form.label_id.value }}" placeholder="Label ID" required></div><br>
+      <label for="chemical_name">Full Name of Chemical</label>
+  		<div><input type="text" name="chemical_name" class="form-control" style="max-width: 500px" placeholder="Full name of chemical" value="{{ form.chemical_name.value }}" required></div><br>
+      <label for="sds_link">Link to SDS</label>
+  		<div><input type="url" name="sds_link" class="form-control" style="max-width: 500px" placeholder="SDS Link (starting with http)" value="{{ form.sds_link.value|default_if_none:'' }}"></div><br>
+      <label for="location">Location</label>
+      <div>
+				<select name="location" class="form-control" style="max-width: 500px" required>
+					<option selected="selected" value = "{{ form.location.value }}">{{ form.location.value }}</option>
+					<option value = "Nano2 Bay -Caustic Cabinet">Nano2 Bay - Caustic Cabinet</option>
+					<option value = "Nano2 Bay - Flammables Fridge">Nano2 Bay - Flammables Fridge</option>
+					<option value = "Nano2 Bay - Solvent Cabinet">Nano2 Bay - Solvent Cabinet</option>
+					<option value = "Photo Bay - Caustic Cabinet">Photo Bay - Caustic Cabinet</option>
+					<option value = "Photo Bay - Solvent Cabinet">Photo Bay - Solvent Cabinet</option>
+					<option value = "SMP - Flammables Fridge">SMP - Flammables Fridge</option>
+					<option value = "SMP - No Flammables Fridge">SMP - No Flammables Fridge</option>
+					<option value = "SMP-Acid/Corrosive Blue Cabinet (chase area)">SMP-Acid/Corrosive Blue Cabinet (chase area)</option>
+					<option value = "Wet Bay - Acid Cabinet">Wet Bay - Acid Cabinet</option>
+					<option value = "Wet Bay - Caustic Cabinet">Wet Bay - Caustic Cabinet</option>
+					<option value = "Wet Bay - Flammables Fridge">Wet Bay - Flammables Fridge</option>
+					<option value = "Wet Bay - Solvent Cabinet">Wet Bay - Solvent Cabinet</option>
+					<option value = "Other">Other</option>
+				</select>
+			</div><br>
+      <div class="row"
+        <div class="form-group">
+    			<label for="in_date" class="col-sm-2 control-label">Date of Entrance</label>
+    			<div class="col-sm-3">
+    				<input id="in_date" type="text" name="in_date" class="form-control" value="{{ form.in_date.value }}" required>
+    			</div>
+    			<label for="expiration" class="col-sm-1 control-label">Expiration</label>
+    			<div class="col-sm-3">
+    				<input id="expiration" type="text" name="expiration" class="form-control" value="{{ form.expiration.value }}" required>
+    			</div>
+          <div class="control-label col-sm-2" style="text-align:left">
+            <a href="javascript:void(0)" onclick="$('#expiration').val('{{ one_year_from_now|date }}')">One year from now</a>
+          </div>
+    		</div>
+      </div>
+		<input type="submit" value="Update User Chemical" class="btn btn-success">
+	</form>
+
+  <script type="text/javascript">
+
+    function clear_selected_owner()
+    {
+      $("#chosen_owner").val('').hide();
+      $("#owner_search").typeahead('val', '').show().focus();
+      $("#owner").val('');
+    }
+
+    function fetch_user(jquery_event, search_selection, dataset_name)
+    {
+      $('#owner_search').hide();
+      $('#chosen_owner').val(search_selection.name).show();
+      $('#owner').val(search_selection.id);
+    }
+
+    function on_load()
+    {
+      $('#owner_search').autocomplete('users', fetch_user, {{ users|json_search_base }}).focus();
+    }
+
+    var timepicker_properties =
+    {
+      format: 'MM/DD/YYYY'
+    };
+    $('#in_date').datetimepicker(timepicker_properties);
+    $('#expiration').datetimepicker(timepicker_properties);
+    $(on_load);
+
+  </script>
+
+
+{% endblock %}

@@ -13,6 +13,7 @@
           <th><a href="{% url 'user_chemicals' sort_by='expiration' %}">Expiration Date</a></th>
           <th><a href="{% url 'user_chemicals' sort_by='location' %}">Location</a></th>
           <th>SDS</th>
+          <th> </th>
         </tr></thead>
         <tbody>
           {% for x in user_chemicals %}
@@ -24,6 +25,7 @@
               <td>{{ x.expiration }}</td>
               <td>{{ x.location }}</td>
               <td>{% if x.sds_link %}<a href="{{ x.sds_link }}" target="_blank">SDS</a>{% else %}No Link{% endif %}</td>
+              <td><a href="{% url 'update_user_chemical' x.id %}" class="btn btn-default">Update</a></td>
             </tr>
           {% endfor %}
         </tbody>

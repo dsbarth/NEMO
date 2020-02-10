@@ -18,7 +18,7 @@ from django.utils import timezone
 from django.views.decorators.http import require_GET, require_POST
 
 from NEMO.decorators import disable_session_expiry_refresh
-from NEMO.models import Tool, Reservation, Configuration, UsageEvent, AreaAccessRecord, StaffCharge, User, Project, Account, ScheduledOutage, ScheduledOutageCategory, Task, StockroomItem, Consumable, SafetyIssue, ChemicalRequest
+from NEMO.models import Tool, Reservation, Configuration, UsageEvent, AreaAccessRecord, StaffCharge, User, UserChemical, Project, Account, ScheduledOutage, ScheduledOutageCategory, Task, StockroomItem, Consumable, SafetyIssue, ChemicalRequest
 from NEMO.utilities import bootstrap_primary_color, extract_times, extract_dates, format_datetime, parse_parameter_string, send_mail, create_email_attachment, localize, get_month_timeframe
 from NEMO.views.constants import ADDITIONAL_INFORMATION_MAXIMUM_LENGTH
 from NEMO.views.customization import get_customization, get_media_file_contents
@@ -592,16 +592,61 @@ def email_reservation_reminders(request):
 		subject = f"Upcoming {facility_name} Reservations"
 		for user in goodAggregate.values():
 			rendered_message = Template(good_message).render(Context({'user': user, 'template_color': bootstrap_primary_color('success')}))
-			send_mail(subject, '', user_office_email, [user['email']], html_message=rendered_message)
+			send_mail(subject, rendered_message, user_office_email, [user['email']])
 
 	if problem_message:
 		subject = f"Problem With Upcoming {facility_name} Reservations"
 		for user in problemAggregate.values():
 			rendered_message = Template(problem_message).render(Context({'user': user, 'template_color': bootstrap_primary_color('danger')}))
-			send_mail(subject, '', user_office_email, [user['email']], html_message=rendered_message)
+			send_mail(subject, rendered_message, user_office_email, [user['email']])
 
 	return HttpResponse()
 
+@login_required
+@permission_required('NEMO.trigger_timed_services', raise_exception=True)
+@require_GET
+def email_user_chem_reminders(request):
+	message = get_media_file_contents('generic_email.html')
+	user_office_email = get_customization('user_office_email_address')
+	if message and user_office_email:
+		user_chems = UserChemical.objects.filter(expiration=timezone.now().date()+timedelta(days=7))
+		facility_name = get_customization('facility_name')
+		if facility_name == '':
+			facility_name = "Facility"
+		dictionary = {
+			'title': f'Expiring Chemical in {facility_name}',
+			'template_color': '#f0ad4e',
+		}
+		for user_chem in user_chems:
+			owner = user_chem.owner
+			chemical_name = user_chem.chemical_name
+			expiration = user_chem.expiration
+			location = user_chem.location
+			dictionary['greeting'] = f'Dear {owner.first_name}'
+			contents = f'Your chemical, {chemical_name}, located in {location}, will expire in one week on {expiration}. \n\nPlease reply to this email to let us know if you will continue to use it or plan to remove it from the {facility_name} in the next week.'
+			dictionary['contents'] = contents
+			subject = f'Your Chemical in {facility_name}'
+			rendered_message = Template(message).render(Context(dictionary))
+			send_mail(subject, rendered_message, user_office_email, [owner.email])
+
+		expired_chems = UserChemical.objects.filter(expiration=timezone.now().date())
+		dictionary = {
+			'title': f'Expired Chemical in {facility_name}',
+			'template_color': '#d9534f',
+		}
+		for user_chem in expired_chems:
+			owner = user_chem.owner
+			chemical_name = user_chem.chemical_name
+			expiration = user_chem.expiration
+			location = user_chem.location
+			dictionary['greeting'] = f'Dear {owner.first_name}'
+			contents = f'Your chemical, {chemical_name}, located in {location}, expires today, {expiration}. \n\nPlease reply to this email immediately to let us know if you will continue to use it or plan to remove it from the {facility_name}.'
+			dictionary['contents'] = contents
+			subject = f'Your Chemical in {facility_name}'
+			rendered_message = Template(message).render(Context(dictionary))
+			send_mail(subject, rendered_message, user_office_email, [owner.email, user_office_email])
+
+	return HttpResponse()
 
 @login_required
 @permission_required('NEMO.trigger_timed_services', raise_exception=True)
@@ -747,7 +792,7 @@ def email_daily_passdown(request):
 	if message:
 		subject = f"{facility_name} Daily Passdown"
 		rendered_message = Template(message).render(Context({'passdown': passdown}))
-		send_mail(subject, '', user_office_email, [passdown_email], html_message=rendered_message)
+		send_mail(subject, rendered_message, user_office_email, [passdown_email])
 	return HttpResponse()
 
 @login_required

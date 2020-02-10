@@ -173,6 +173,7 @@ urlpatterns = [
 	url(r'^user_chemicals/add$', user_chemicals.add_user_chemical, name='add_user_chemical'),
 	url(r'^user_chemicals/add/(?P<chem_req>\d+)/$', user_chemicals.add_user_chemical, name='add_user_chemical'),
 	url(r'^user_chemicals/update/(?P<chem_id>\d+)/$', user_chemicals.update_user_chemical, name='update_user_chemical'),
+	url(r'^user_chemicals/delete/(?P<chem_id>\d+)/$', user_chemicals.delete_user_chemical, name='delete_user_chemical'),
 
 	# Mobile:
 	url(r'^choose_tool/then/(?P<next_page>view_calendar|tool_control)/$', mobile.choose_tool, name='choose_tool'),
@@ -263,6 +264,7 @@ if settings.ALLOW_CONDITIONAL_URLS:
 		url(r'^email_usage_reminders/$', calendar.email_usage_reminders, name='email_usage_reminders'),
 		url(r'^cancel_unused_reservations/$', calendar.cancel_unused_reservations, name='cancel_unused_reservations'),
 		url(r'^email_daily_passdown/$', calendar.email_daily_passdown, name='email_daily_passdown'),
+		url(r'^email_user_chem_reminders/$', calendar.email_user_chem_reminders, name='email_user_chem_reminders'),
 
 		# Abuse:
 		url(r'^abuse/$', abuse.abuse, name='abuse'),

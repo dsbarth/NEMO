@@ -7,7 +7,7 @@ from django.http import HttpResponseRedirect
 from django.shortcuts import get_object_or_404, render, redirect
 from django.template import Context, Template
 from django.urls import reverse
-from django.views.decorators.http import require_http_methods, require_GET
+from django.views.decorators.http import require_http_methods, require_GET, require_POST
 from django.utils import timezone
 
 from NEMO.forms import ChemicalRequestForm, ChemicalRequestApprovalForm, UserChemicalForm, UserChemicalUpdateForm
@@ -42,10 +42,10 @@ def chemical_request(request):
 def view_requests(request, sort_by=''):
 	dictionary = {}
 	all_requests = ChemicalRequest.objects.all()
-	if sort_by in ['requester', 'date', 'chemical_name', 'approved']:
+	if sort_by in ['requester', 'chemical_name', 'approved']:
 		all_requests = all_requests.order_by(sort_by)
 	else:
-		all_requests = all_requests.order_by('date')
+		all_requests = all_requests.order_by('-date')
 	dictionary['all_requests'] = all_requests
 	pending_requests = all_requests.filter(approved=0)
 	dictionary['pending_requests'] = pending_requests
@@ -158,10 +158,21 @@ def add_user_chemical(request, chem_req=''):
 
 @staff_member_required(login_url=None)
 @require_http_methods(['GET', 'POST'])
-def update_user_chemical(request):
-	if request.method == 'POST':
-		chemical_request = get_object_or_404(UserChemical, id=chem_id)
-		form = UserChemicalUpdateForm(request.user, data=request.POST, instance=chemical_request)
+def update_user_chemical(request, chem_id):
+	user_chem = get_object_or_404(UserChemical, id=chem_id)
+	if request.method == 'GET':
+		form = UserChemicalForm(instance=user_chem)
+		owner = user_chem.owner
+		dictionary = {
+			'form': form,
+			'one_year_from_now': timezone.now() + timedelta(days=365),
+			'users': User.objects.filter(is_active=True),
+			'owner': owner,
+		}
+		return render(request, 'user_chemicals/update_user_chemical.html', dictionary)
+	elif request.method == 'POST':
+		user_chem = get_object_or_404(UserChemical, id=chem_id)
+		form = UserChemicalForm(data=request.POST, instance=user_chem)
 		if not form.is_valid():
 			dictionary = {
 				'title': 'Chemical request update failed',
@@ -169,9 +180,16 @@ def update_user_chemical(request):
 				'content': str(form.errors),
 			}
 			return render(request, 'acknowledgement.html', dictionary)
-		chemical_request = form.save()
+		user_chem = form.save()
 		return HttpResponseRedirect(reverse('user_chemicals'))
-	dictionary = {
-		'chemical_request': get_object_or_404(UserChemical, id=chemical_id)
-	}
-	return render(request, 'user_chemicals/update_user_chemical.html', dictionary)
+	return HttpResponseRedirect(reverse('user_chemicals'))
+
+@staff_member_required(login_url=None)
+@require_POST
+def delete_user_chemical(request, chem_id):
+	try:
+		user_chem = UserChemical.objects.get(id=chem_id)
+		user_chem.delete()
+	except UserChemical.DoesNotExist:
+		pass
+	return redirect(reverse('user_chemicals'))

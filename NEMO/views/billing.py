@@ -14,13 +14,14 @@ from django.utils.http import urlencode
 from django.views.decorators.http import require_POST, require_GET, require_http_methods
 
 from NEMO.utilities import parse_start_and_end_date, month_list, get_month_timeframe
-from NEMO.models import User, AreaAccessRecord, Account, Project, StockroomWithdraw, StaffCharge
+from NEMO.models import User, UserType, AreaAccessRecord, Account, Project, StockroomWithdraw, StaffCharge
 from NEMO.views.customization import get_customization
 
 #@staff_member_required(login_url=None)
 #@require_GET
 def get_billing_data(start, end):
 	billing_result = []
+	undergrad_rate = UserType.objects.get(name='Undergraduate').daily_rate
 	#daily_rate = {'Internal - Full':135, 'Internal - Unlimited':0, 'Internal - SMP':67.5, 'Internal - Packaging':67.5, 'External Academic':220,'Industrial':0,'Undergraduate':45}
 
 	#staff_charge_rate = {'Internal - Full':80, 'Internal - Unlimited':80, 'Internal - SMP':80, 'Internal - Packaging':80, 'External Academic':130,'Industrial':480,'Undergraduate':80}
@@ -71,10 +72,10 @@ def get_billing_data(start, end):
 		except:
 			principal_inv = "unknown"
 		if user.type.name == 'Internal - Unlimited':
-			usage_bill = 1125
+			usage_bill = user.type.daily_rate
 		elif user.type.name == 'Internal - Full' or user.type.name == 'Internal - Packaging' or user.type.name == 'Internal - SMP':
 			if billable_days > 10:
-				usage_bill = 10*user.type.daily_rate+(billable_days-10)*45
+				usage_bill = 10*user.type.daily_rate+(billable_days-10)*undergrad_rate
 			else:
 				usage_bill = billable_days*user.type.daily_rate
 		else:
@@ -107,6 +108,8 @@ def billingxls(request):
 		start, end = parse_start_and_end_date(request.GET['start'], request.GET['end'])
 		fn = "billing_" + start.strftime("%Y%m%d") + "_" + end.strftime("%Y%m%d") + ".xlsx"
 		billing_result = get_billing_data(start, end)
+		unlimited_rate = UserType.objects.get(name='Internal - Unlimited').daily_rate
+		undergrad_rate = UserType.objects.get(name='Undergraduate').daily_rate
 		response = HttpResponse(content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 		response['Content-Disposition'] = 'attachment; filename = "%s"' % fn
 		book = Workbook(response, {'in_memory': True})
@@ -127,9 +130,9 @@ def billingxls(request):
 				days_cell = xl_rowcol_to_cell(iter,5)
 				adj_cell = xl_rowcol_to_cell(iter,7)
 				if r['user_type'] == 'Internal - Unlimited':
-					usage_eq = 1125
+					usage_eq = unlimited_rate
 				elif r['user_type'] == 'Internal - Full'or r['user_type'] == 'Internal - Packaging' or r['user_type'] == 'Internal - SMP':
-					usage_eq = f'=min({xl_rowcol_to_cell(iter,5)}+{xl_rowcol_to_cell(iter,6)},10)*{xl_rowcol_to_cell(iter,7)}+max(-10+{xl_rowcol_to_cell(iter,5)}+{xl_rowcol_to_cell(iter,6)},0)*45'
+					usage_eq = f'=min({xl_rowcol_to_cell(iter,5)}+{xl_rowcol_to_cell(iter,6)},10)*{xl_rowcol_to_cell(iter,7)}+max(-10+{xl_rowcol_to_cell(iter,5)}+{xl_rowcol_to_cell(iter,6)},0)*{undergrad_rate}'
 				else:
 					usage_eq = f'=({xl_rowcol_to_cell(iter,5)}+{xl_rowcol_to_cell(iter,6)})*{xl_rowcol_to_cell(iter,7)}'
 				total_eq = f'=sum({xl_range(iter, 8, iter, 11)})'

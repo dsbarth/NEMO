@@ -3,6 +3,7 @@ from datetime import timedelta, datetime
 from http import HTTPStatus
 
 from django.contrib.auth.decorators import login_required, permission_required
+from django.http import HttpResponse
 from django.shortcuts import render
 from django.urls import reverse
 from django.utils import timezone
@@ -10,7 +11,8 @@ from django.utils.dateparse import parse_date, parse_time
 from django.views.decorators.http import require_GET, require_POST
 from django.http import HttpResponse, HttpResponseBadRequest
 
-from NEMO.models import Project, Reservation, Tool, UsageEvent, User
+from NEMO.decorators import disable_session_expiry_refresh
+from NEMO.models import Project, Reservation, Tool, UsageEvent, User, Area, AreaAccessRecord
 from NEMO.utilities import quiet_int, localize
 from NEMO.views.calendar import determine_insufficient_notice, extract_configuration, cancel_the_reservation
 from NEMO.views.policy import check_policy_to_disable_tool, check_policy_to_enable_tool, \
@@ -176,7 +178,7 @@ def cancel_reservation(request, reservation_id):
 @permission_required('NEMO.kiosk')
 @require_POST
 def tool_reservation(request, tool_id, user_id, back):
-	tool = Tool.objects.get(id=tool_id)
+	tool = Tool.objects.get(id=tool_id, visible=True)
 	customer = User.objects.get(id=user_id)
 	project = Project.objects.get(id=request.POST['project_id'])
 
@@ -197,17 +199,24 @@ def tool_reservation(request, tool_id, user_id, back):
 def choices(request):
 	try:
 		customer = User.objects.get(badge_number=request.GET['badge_number'])
-		reservations = Reservation.objects.filter(start__gt=timezone.now(), user=customer, missed=False, cancelled=False, shortened=False)
-		reservations = reservations.reverse()
+		usage_events = UsageEvent.objects.filter(operator=customer.id, end=None).prefetch_related('tool', 'project')
+		tools_in_use = [u.tool.tool_or_parent_id() for u in usage_events]
+		fifteen_minutes_from_now = timezone.now() + timedelta(minutes=15)
+		reservations = Reservation.objects.filter(end__gt=timezone.now(), user=customer, missed=False, cancelled=False, shortened=False).exclude(tool_id__in=tools_in_use, start__lte=fifteen_minutes_from_now).order_by('start')
 	except:
 		dictionary = {'message': "Your badge wasn't recognized. If you got a new one recently then we'll need to update your account. Please contact staff to resolve the problem."}
 		return render(request, 'kiosk/acknowledgement.html', dictionary)
+
+	categories = [t[0] for t in Tool.objects.filter(visible=True).order_by('_category').values_list('_category').distinct()]
+	unqualified_categories = [category for category in categories if not customer.is_staff and not Tool.objects.filter(visible=True, _category=category, id__in=customer.qualifications.all().values_list('id')).exists()]
 	dictionary = {
+		'now': timezone.now(),
 		'customer': customer,
 		'usage_events': UsageEvent.objects.filter(operator=customer.id, end=None).order_by('tool__name').prefetch_related('tool', 'project'),
 		'upcoming_reservations': reservations,
 		'tool_summary': create_tool_summary(request),
-		'categories': [t[0] for t in Tool.objects.filter(visible=True).order_by('category').values_list('category').distinct()],
+		'categories': categories,
+		'unqualified_categories': unqualified_categories,
 	}
 	return render(request, 'kiosk/choices.html', dictionary)
 
@@ -221,11 +230,12 @@ def category_choices(request, category, user_id):
 	except:
 		dictionary = {'message': "Your badge wasn't recognized. If you got a new one recently then we'll need to update your account. Please contact staff to resolve the problem."}
 		return render(request, 'kiosk/acknowledgement.html', dictionary)
-	tools = Tool.objects.filter(visible=True, category=category)
+	tools = Tool.objects.filter(visible=True, _category=category)
 	dictionary = {
 		'customer': customer,
 		'category': category,
 		'tools': tools,
+		'unqualified_tools': [tool for tool in tools if not customer.is_staff and tool not in customer.qualifications.all()],
 		'tool_summary': create_tool_summary(request),
 	}
 	return render(request, 'kiosk/category_choices.html', dictionary)
@@ -266,7 +276,7 @@ def tool_information(request, tool_id, user_id, back):
 @permission_required('NEMO.kiosk')
 @require_GET
 def kiosk(request, location=None):
-	if location and Tool.objects.filter(location=location, visible=True).exists():
+	if location and Tool.objects.filter(_location=location, visible=True).exists():
 		dictionary = {
 			'location': location,
 		}
@@ -277,3 +287,17 @@ def kiosk(request, location=None):
 			'locations': [{'url': reverse('kiosk', kwargs={'location': location}), 'name': location} for location in locations]
 		}
 		return render(request, 'kiosk/location_directory.html', dictionary)
+
+
+@login_required
+@require_GET
+@disable_session_expiry_refresh
+def kiosk_occupancy(request):
+	area = request.GET.get('occupancy')
+	if area is None or not Area.objects.filter(name=area).exists():
+		return HttpResponse()
+	dictionary = {
+		'area': area,
+		'occupants': AreaAccessRecord.objects.filter(area__name=area, end=None, staff_charge=None).prefetch_related('customer'),
+	}
+	return render(request, 'kiosk/occupancy.html', dictionary)

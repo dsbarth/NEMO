@@ -3,6 +3,7 @@
 <head>
 	<title>{% block title %}{% endblock %}</title>
 	{% load static %}
+	{% load custom_tags_and_filters %}
 
 	{# jQuery #}
 	<script type="text/javascript" src="{% static "jquery.js" %}"></script>
@@ -16,6 +17,12 @@
 	<script type="text/javascript" src="{% static "nemo.js" %}"></script>
 	<link rel="stylesheet" type="text/css" href="{% static "nemo.css" %}"/>
 
+	{# Area Access #}
+	<link rel="stylesheet" type="text/css" href="{% static "area_access/area_access.css" %}"/>
+
+	{# Badge Reader #}
+	<script type="text/javascript" src="{% static "area_access/badge_reader.js" %}"></script>
+
 	<!--suppress CssUnusedSymbol -->
 	<style>
 		.btn-extra-large
@@ -26,55 +33,41 @@
 		}
 	</style>
 </head>
-<body style="padding-left:20px; padding-right:20px">
-	<div id="default_content">
-		{% block default_content %}
-		{% endblock %}
-		<div id="occupancy"></div>
+<body>
+	<div id="area-container">
+		<div id="default_content">
+			{% block default_content %}
+			{% endblock %}
+			<div id="occupancy"></div>
+		</div>
+		<div id="error" style="display: none"><h1>There was a problem communicating with the web server. Please visit the user office for assistance.</h1><audio id="error-sound" src="{% url 'media' 'error.mp3' %}"></audio></div>
+		<div id="status" style="display: none"></div>
+		<div><h1 style="color:lightgrey" id="badge_number"></h1></div>
 	</div>
-	<div id="error" style="display: none"><h1>There was a problem communicating with the web server. Please visit the user office for assistance.</h1><audio id="error-sound" src="{% url 'media' 'error.mp3' %}"></audio></div>
-	<div id="status" style="display: none"></div>
-	<div><h1 style="color:lightgrey" id="badge_number"></h1></div>
+	<!-- Version -->
+    <footer class="page-footer">
+        {% app_version as app_version %}
+        <div class="container">
+            {% if app_version %}v {% app_version %}{% else %}&nbsp;{% endif %}
+        </div>
+    </footer>
 	<script type="text/javascript">
-		$(window).keypress(on_keypress).keydown(on_keydown);
-		let record_badge_number = false;
-		let badge_number = "";
+		var area_access_badge_reader = new BadgeReader(send_badge_number);
 		let timeout_handle = null;
 		let occupancy = new URLSearchParams(window.location.search).get('occupancy');
-		
+
+		function send_badge_number(badge_number)
+		{
+		    clear_timeout();
+			{% block action %}{% endblock %}
+		}
+
 		if(occupancy)
 		{
 			fetch_occupancy();
 			setInterval(fetch_occupancy, 30000);
 		}
 
-		{# Note that keydown and keyup provide a code indicating which key is pressed, while keypress indicates which character was entered. For example, a lowercase "a" will be reported as 65 by keydown and keyup, but as 97 by keypress. An uppercase "A" is reported as 65 by all events. Because of this distinction, when catching special keystrokes such as F2, .keydown() or .keyup() is a better choice. #}
-
-		function on_keypress(event)
-		{
-			if(record_badge_number)
-			{
-				if(event.which >= 48)
-				{
-					badge_number += String.fromCharCode(event.which);
-					$("#badge_number").html(badge_number);
-				}
-			}
-		}
-		function on_keydown(event)
-		{
-			if(event.which === 113) {# The F2 key activates badge number recording #}
-			{
-				record_badge_number = !record_badge_number;
-				if(!record_badge_number)
-				{
-					clear_timeout();
-					{% block action %}{% endblock %}
-					$("#badge_number").html(badge_number + ", sent");
-					badge_number = "";
-				}
-			}
-		}
 		function load_complete(response, status, xml_http_request)
 		{
 			if(status === "error")
@@ -146,7 +139,7 @@
 		}
 		function fetch_occupancy()
 		{
-			ajax_get('{% url 'occupancy' %}', {'occupancy': occupancy}, function(response) { $("#occupancy").html(response); });
+			ajax_get('{% url 'area_access_occupancy' %}', {'occupancy': occupancy}, function(response) { $("#occupancy").html(response); });
 		}
 	</script>
 </body>

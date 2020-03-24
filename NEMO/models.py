@@ -22,7 +22,7 @@ from django.urls import reverse
 from django.utils import timezone
 from django.utils.crypto import get_random_string
 
-from NEMO.utilities import send_mail, get_task_image_filename
+from NEMO.utilities import send_mail, get_task_image_filename, get_tool_image_filename
 from NEMO.views.constants import ADDITIONAL_INFORMATION_MAXIMUM_LENGTH
 from NEMO.widgets.configuration_editor import ConfigurationEditor
 
@@ -181,6 +181,9 @@ class User(models.Model):
 	def get_username(self):
 		return self.username
 
+	def has_usable_password(self):
+		return False
+
 	def email_user(self, subject, message, from_email, attachments=None):
 		""" Sends an email to this user. """
 		send_mail(subject=subject, message=message, from_email=from_email, recipient_list=[self.email], attachments=attachments)
@@ -222,6 +225,10 @@ class User(models.Model):
 		except StaffCharge.DoesNotExist:
 			return None
 
+	@classmethod
+	def get_email_field_name(cls):
+		return 'email'
+
 	class Meta:
 		ordering = ['first_name']
 		permissions = (
@@ -236,61 +243,364 @@ class User(models.Model):
 
 class Tool(models.Model):
 	name = models.CharField(max_length=100, unique=True)
-	category = models.CharField(max_length=1000, help_text="Create sub-categories using slashes. For example \"Category 1/Sub-category 1\".")
+	parent_tool = models.ForeignKey('Tool', related_name="tool_children_set", null=True, blank=True, help_text='Select a parent tool to allow alternate usage', on_delete=models.CASCADE)
 	visible = models.BooleanField(default=True, help_text="Specifies whether this tool is visible to users.")
-	operational = models.BooleanField(default=False, help_text="Marking the tool non-operational will prevent users from using the tool.")
-	primary_owner = models.ForeignKey(User, related_name="primary_tool_owner", help_text="The staff member who is responsible for administration of this tool.", on_delete=models.PROTECT)
-	backup_owners = models.ManyToManyField(User, blank=True, related_name="backup_for_tools", help_text="Alternate staff members who are responsible for administration of this tool when the primary owner is unavailable.")
-	location = models.CharField(max_length=100)
-	phone_number = models.CharField(max_length=100)
-	notification_email_address = models.EmailField(blank=True, null=True, help_text="Messages that relate to this tool (such as comments, problems, and shutdowns) will be forwarded to this email address. This can be a normal email address or a mailing list address.")
+	_description = models.TextField(db_column="description", null=True, blank=True, help_text="HTML syntax could be used")
+	_serial = models.CharField(db_column="serial", null=True, blank=True, max_length=100, help_text="Serial Number")
+	_image = models.ImageField(db_column="image", upload_to=get_tool_image_filename, blank=True, help_text="An image that represent the tool. Maximum width and height are 500px")
+	_category = models.CharField(db_column="category", null=True, blank=True, max_length=1000, help_text="Create sub-categories using slashes. For example \"Category 1/Sub-category 1\".")
+	_operational = models.BooleanField(db_column="operational", default=False, help_text="Marking the tool non-operational will prevent users from using the tool.")
+	_primary_owner = models.ForeignKey(User, db_column="primary_owner_id", null=True, blank=True, related_name="primary_tool_owner", help_text="The staff member who is responsible for administration of this tool.", on_delete=models.PROTECT)
+	_backup_owners = models.ManyToManyField(User, db_table='NEMO_tool_backup_owners', blank=True, related_name="backup_for_tools", help_text="Alternate staff members who are responsible for administration of this tool when the primary owner is unavailable.")
+	_location = models.CharField(db_column="location", null=True, blank=True, max_length=100)
+	_phone_number = models.CharField(db_column="phone_number", null=True, blank=True, max_length=100)
+	_notification_email_address = models.EmailField(db_column="notification_email_address", blank=True, null=True, help_text="Messages that relate to this tool (such as comments, problems, and shutdowns) will be forwarded to this email address. This can be a normal email address or a mailing list address.")
+	_interlock = models.OneToOneField('Interlock', db_column="interlock_id", blank=True, null=True, on_delete=models.SET_NULL)
 	# Policy fields:
-	requires_area_access = models.ForeignKey('Area', null=True, blank=True, help_text="Indicates that this tool is physically located in a billable area and requires an active area access record in order to be operated.", on_delete=models.PROTECT)
-	grant_physical_access_level_upon_qualification = models.ForeignKey('PhysicalAccessLevel', null=True, blank=True, help_text="The designated physical access level is granted to the user upon qualification for this tool.", on_delete=models.PROTECT)
-	grant_badge_reader_access_upon_qualification = models.CharField(max_length=100, null=True, blank=True, help_text="Badge reader access is granted to the user upon qualification for this tool.")
-	interlock = models.OneToOneField('Interlock', blank=True, null=True, on_delete=models.SET_NULL)
-	reservation_horizon = models.PositiveIntegerField(default=14, null=True, blank=True, help_text="Users may create reservations this many days in advance. Leave this field blank to indicate that no reservation horizon exists for this tool.")
-	minimum_usage_block_time = models.PositiveIntegerField(null=True, blank=True, help_text="The minimum amount of time (in minutes) that a user must reserve this tool for a single reservation. Leave this field blank to indicate that no minimum usage block time exists for this tool.")
-	maximum_usage_block_time = models.PositiveIntegerField(null=True, blank=True, help_text="The maximum amount of time (in minutes) that a user may reserve this tool for a single reservation. Leave this field blank to indicate that no maximum usage block time exists for this tool.")
-	maximum_reservations_per_day = models.PositiveIntegerField(null=True, blank=True, help_text="The maximum number of reservations a user may make per day for this tool.")
-	minimum_time_between_reservations = models.PositiveIntegerField(null=True, blank=True, help_text="The minimum amount of time (in minutes) that the same user must have between any two reservations for this tool.")
-	maximum_future_reservation_time = models.PositiveIntegerField(null=True, blank=True, help_text="The maximum amount of time (in minutes) that a user may reserve from the current time onwards.")
-	missed_reservation_threshold = models.PositiveIntegerField(null=True, blank=True, help_text="The amount of time (in minutes) that a tool reservation may go unused before it is automatically marked as \"missed\" and hidden from the calendar. Usage can be from any user, regardless of who the reservation was originally created for. The cancellation process is triggered by a timed job on the web server.")
-	allow_delayed_logoff = models.BooleanField(default=False, help_text='Upon logging off users may enter a delay before another user may use the tool. Some tools require "spin-down" or cleaning time after use.')
-	reservation_required = models.BooleanField(default=False, help_text='Require that users have a current (within 15 minutes) reservation in order to use the tool')
-	post_usage_questions = models.TextField(null=True, blank=True, help_text="")
-	policy_off_between_times = models.BooleanField(default=False, help_text="Check this box to disable policy rules every day between the given times")
-	policy_off_start_time = models.TimeField(null=True, blank=True, help_text="The start time when policy rules should NOT be enforced")
-	policy_off_end_time = models.TimeField(null=True, blank=True, help_text="The end time when policy rules should NOT be enforced")
-	policy_off_weekend = models.BooleanField(default=False, help_text="Whether or not policy rules should be enforced on weekends")
+	_requires_area_access = models.ForeignKey('Area', db_column="requires_area_access_id", null=True, blank=True, help_text="Indicates that this tool is physically located in a billable area and requires an active area access record in order to be operated.", on_delete=models.PROTECT)
+	_grant_physical_access_level_upon_qualification = models.ForeignKey('PhysicalAccessLevel', db_column="grant_physical_access_level_upon_qualification_id", null=True, blank=True, help_text="The designated physical access level is granted to the user upon qualification for this tool.", on_delete=models.PROTECT)
+	_grant_badge_reader_access_upon_qualification = models.CharField(db_column="grant_badge_reader_access_upon_qualification", max_length=100, null=True, blank=True, help_text="Badge reader access is granted to the user upon qualification for this tool.")
+	_reservation_horizon = models.PositiveIntegerField(db_column="reservation_horizon", default=14, null=True, blank=True, help_text="Users may create reservations this many days in advance. Leave this field blank to indicate that no reservation horizon exists for this tool.")
+	_minimum_usage_block_time = models.PositiveIntegerField(db_column="minimum_usage_block_time", null=True, blank=True, help_text="The minimum amount of time (in minutes) that a user must reserve this tool for a single reservation. Leave this field blank to indicate that no minimum usage block time exists for this tool.")
+	_maximum_usage_block_time = models.PositiveIntegerField(db_column="maximum_usage_block_time", null=True, blank=True, help_text="The maximum amount of time (in minutes) that a user may reserve this tool for a single reservation. Leave this field blank to indicate that no maximum usage block time exists for this tool.")
+	_maximum_reservations_per_day = models.PositiveIntegerField(db_column="maximum_reservations_per_day", null=True, blank=True, help_text="The maximum number of reservations a user may make per day for this tool.")
+	_minimum_time_between_reservations = models.PositiveIntegerField(db_column="minimum_time_between_reservations", null=True, blank=True, help_text="The minimum amount of time (in minutes) that the same user must have between any two reservations for this tool.")
+	_maximum_future_reservation_time = models.PositiveIntegerField(db_column="maximum_future_reservation_time", null=True, blank=True, help_text="The maximum amount of time (in minutes) that a user may reserve from the current time onwards.")
+	_missed_reservation_threshold = models.PositiveIntegerField(db_column="missed_reservation_threshold", null=True, blank=True, help_text="The amount of time (in minutes) that a tool reservation may go unused before it is automatically marked as \"missed\" and hidden from the calendar. Usage can be from any user, regardless of who the reservation was originally created for. The cancellation process is triggered by a timed job on the web server.")
+	_allow_delayed_logoff = models.BooleanField(db_column="allow_delayed_logoff", default=False, help_text='Upon logging off users may enter a delay before another user may use the tool. Some tools require "spin-down" or cleaning time after use.')
+	_reservation_required = models.BooleanField(default=False, help_text='Require that users have a current (within 15 minutes) reservation in order to use the tool')
+	_post_usage_questions = models.TextField(db_column="post_usage_questions", null=True, blank=True, help_text="Upon logging off a tool, questions can be asked such as how much consumables were used by the user. This field will only accept JSON format")
+	_policy_off_between_times = models.BooleanField(db_column="policy_off_between_times", default=False, help_text="Check this box to disable policy rules every day between the given times")
+	_policy_off_start_time = models.TimeField(db_column="policy_off_start_time", null=True, blank=True, help_text="The start time when policy rules should NOT be enforced")
+	_policy_off_end_time = models.TimeField(db_column="policy_off_end_time", null=True, blank=True, help_text="The end time when policy rules should NOT be enforced")
+	_policy_off_weekend = models.BooleanField(db_column="policy_off_weekend", default=False, help_text="Whether or not policy rules should be enforced on weekends")
 
 	class Meta:
 		ordering = ['name']
+
+	@property
+	def category(self):
+		return self.parent_tool.category if self.is_child_tool() else self._category
+
+	@category.setter
+	def category(self, value):
+		self.raise_setter_error_if_child_tool("category")
+		self._category = value
+
+	@property
+	def description(self):
+		return self.parent_tool.description if self.is_child_tool() else self._description
+
+	@description.setter
+	def description(self, value):
+		self.raise_setter_error_if_child_tool("description")
+		self._description = value
+
+	@property
+	def serial(self):
+		return self.parent_tool.serial if self.is_child_tool() else self._serial
+
+	@serial.setter
+	def serial(self, value):
+		self.raise_setter_error_if_child_tool("serial")
+		self._serial = value
+
+	@property
+	def image(self):
+		return self.parent_tool.image if self.is_child_tool() else self._image
+
+	@image.setter
+	def image(self, value):
+		self.raise_setter_error_if_child_tool("image")
+		self._image = value
+
+	@property
+	def operational(self):
+		return self.parent_tool.operational if self.is_child_tool() else self._operational
+
+	@operational.setter
+	def operational(self, value):
+		self.raise_setter_error_if_child_tool("operational")
+		self._operational = value
+
+	@property
+	def primary_owner(self):
+		return self.parent_tool.primary_owner if self.is_child_tool() else self._primary_owner
+
+	@primary_owner.setter
+	def primary_owner(self, value):
+		self.raise_setter_error_if_child_tool("primary_owner")
+		self._primary_owner = value
+
+	@property
+	def backup_owners(self):
+		return self.parent_tool.backup_owners if self.is_child_tool() else self._backup_owners
+
+	@backup_owners.setter
+	def backup_owners(self, value):
+		self.raise_setter_error_if_child_tool("backup_owners")
+		self._backup_owners = value
+
+	@property
+	def location(self):
+		return self.parent_tool.location if self.is_child_tool() else self._location
+
+	@location.setter
+	def location(self, value):
+		self.raise_setter_error_if_child_tool("location")
+		self._location = value
+
+	@property
+	def phone_number(self):
+		return self.parent_tool.phone_number if self.is_child_tool() else self._phone_number
+
+	@phone_number.setter
+	def phone_number(self, value):
+		self.raise_setter_error_if_child_tool("phone_number")
+		self._phone_number = value
+
+	@property
+	def notification_email_address(self):
+		return self.parent_tool.notification_email_address if self.is_child_tool() else self._notification_email_address
+
+	@notification_email_address.setter
+	def notification_email_address(self, value):
+		self.raise_setter_error_if_child_tool("notification_email_address")
+		self._notification_email_address = value
+
+	@property
+	def interlock(self):
+		return self.parent_tool.interlock if self.is_child_tool() else self._interlock
+
+	@interlock.setter
+	def interlock(self, value):
+		self.raise_setter_error_if_child_tool("interlock")
+		self._interlock = value
+
+	@property
+	def requires_area_access(self):
+		return self.parent_tool.requires_area_access if self.is_child_tool() else self._requires_area_access
+
+	@requires_area_access.setter
+	def requires_area_access(self, value):
+		self.raise_setter_error_if_child_tool("requires_area_access")
+		self._requires_area_access = value
+
+	@property
+	def grant_physical_access_level_upon_qualification(self):
+		return self.parent_tool.grant_physical_access_level_upon_qualification if self.is_child_tool() else self._grant_physical_access_level_upon_qualification
+
+	@grant_physical_access_level_upon_qualification.setter
+	def grant_physical_access_level_upon_qualification(self, value):
+		self.raise_setter_error_if_child_tool("grant_physical_access_level_upon_qualification")
+		self._grant_physical_access_level_upon_qualification = value
+
+	@property
+	def grant_badge_reader_access_upon_qualification(self):
+		return self.parent_tool.grant_badge_reader_access_upon_qualification if self.is_child_tool() else self._grant_badge_reader_access_upon_qualification
+
+	@grant_badge_reader_access_upon_qualification.setter
+	def grant_badge_reader_access_upon_qualification(self, value):
+		self.raise_setter_error_if_child_tool("grant_badge_reader_access_upon_qualification")
+		self._grant_badge_reader_access_upon_qualification = value
+
+	@property
+	def reservation_horizon(self):
+		return self.parent_tool.reservation_horizon if self.is_child_tool() else self._reservation_horizon
+
+	@reservation_horizon.setter
+	def reservation_horizon(self, value):
+		self.raise_setter_error_if_child_tool("reservation_horizon")
+		self._reservation_horizon = value
+
+	@property
+	def minimum_usage_block_time(self):
+		return self.parent_tool.minimum_usage_block_time if self.is_child_tool() else self._minimum_usage_block_time
+
+	@minimum_usage_block_time.setter
+	def minimum_usage_block_time(self, value):
+		self.raise_setter_error_if_child_tool("minimum_usage_block_time")
+		self._minimum_usage_block_time = value
+
+	@property
+	def maximum_usage_block_time(self):
+		return self.parent_tool.maximum_usage_block_time if self.is_child_tool() else self._maximum_usage_block_time
+
+	@maximum_usage_block_time.setter
+	def maximum_usage_block_time(self, value):
+		self.raise_setter_error_if_child_tool("maximum_usage_block_time")
+		self._maximum_usage_block_time = value
+
+	@property
+	def maximum_reservations_per_day(self):
+		return self.parent_tool.maximum_reservations_per_day if self.is_child_tool() else self._maximum_reservations_per_day
+
+	@maximum_reservations_per_day.setter
+	def maximum_reservations_per_day(self, value):
+		self.raise_setter_error_if_child_tool("maximum_reservations_per_day")
+		self._maximum_reservations_per_day = value
+
+	@property
+	def minimum_time_between_reservations(self):
+		return self.parent_tool.minimum_time_between_reservations if self.is_child_tool() else self._minimum_time_between_reservations
+
+	@minimum_time_between_reservations.setter
+	def minimum_time_between_reservations(self, value):
+		self.raise_setter_error_if_child_tool("minimum_time_between_reservations")
+		self._minimum_time_between_reservations = value
+
+	@property
+	def maximum_future_reservation_time(self):
+		return self.parent_tool.maximum_future_reservation_time if self.is_child_tool() else self._maximum_future_reservation_time
+
+	@maximum_future_reservation_time.setter
+	def maximum_future_reservation_time(self, value):
+		self.raise_setter_error_if_child_tool("maximum_future_reservation_time")
+		self._maximum_future_reservation_time = value
+
+	@property
+	def missed_reservation_threshold(self):
+		return self.parent_tool.missed_reservation_threshold if self.is_child_tool() else self._missed_reservation_threshold
+
+	@missed_reservation_threshold.setter
+	def missed_reservation_threshold(self, value):
+		self.raise_setter_error_if_child_tool("missed_reservation_threshold")
+		self._missed_reservation_threshold = value
+
+	@property
+	def allow_delayed_logoff(self):
+		return self.parent_tool.allow_delayed_logoff if self.is_child_tool() else self._allow_delayed_logoff
+
+	@allow_delayed_logoff.setter
+	def allow_delayed_logoff(self, value):
+		self.raise_setter_error_if_child_tool("allow_delayed_logoff")
+		self._allow_delayed_logoff = value
+
+	@property
+	def reservation_required(self):
+		return self.parent_tool.reservation_required if self.is_child_tool() else self._reservation_required
+
+	@allow_delayed_logoff.setter
+	def allow_delayed_logoff(self, value):
+		self.raise_setter_error_if_child_tool("reservation_required")
+		self._reservation_required = value
+
+	@property
+	def post_usage_questions(self):
+		return self.parent_tool.post_usage_questions if self.is_child_tool() else self._post_usage_questions
+
+	@post_usage_questions.setter
+	def post_usage_questions(self, value):
+		self.raise_setter_error_if_child_tool("post_usage_questions")
+		self._post_usage_questions = value
+
+	@property
+	def policy_off_between_times(self):
+		return self.parent_tool.policy_off_between_times if self.is_child_tool() else self._policy_off_between_times
+
+	@policy_off_between_times.setter
+	def policy_off_between_times(self, value):
+		self.raise_setter_error_if_child_tool("policy_off_between_times")
+		self._policy_off_between_times = value
+
+	@property
+	def policy_off_start_time(self):
+		return self.parent_tool.policy_off_start_time if self.is_child_tool() else self._policy_off_start_time
+
+	@policy_off_start_time.setter
+	def policy_off_start_time(self, value):
+		self.raise_setter_error_if_child_tool("policy_off_start_time")
+		self._policy_off_start_time = value
+
+	@property
+	def policy_off_end_time(self):
+		return self.parent_tool.policy_off_end_time if self.is_child_tool() else self._policy_off_end_time
+
+	@policy_off_end_time.setter
+	def policy_off_end_time(self, value):
+		self.raise_setter_error_if_child_tool("policy_off_end_time")
+		self._policy_off_end_time = value
+
+	@property
+	def policy_off_weekend(self):
+		return self.parent_tool.policy_off_weekend if self.is_child_tool() else self._policy_off_weekend
+
+	@policy_off_weekend.setter
+	def policy_off_weekend(self, value):
+		self.raise_setter_error_if_child_tool("policy_off_weekend")
+		self._policy_off_weekend = value
+
+	def name_or_child_in_use_name(self, parent_ids = None) -> str:
+		""" This method returns the tool name unless one of its children is in use."""
+		""" When used in loops, provide the parent_ids list to avoid unnecessary db calls """
+		if self.is_parent_tool(parent_ids) and self.in_use():
+			return self.get_current_usage_event().tool.name
+		return self.name
+
+	def is_child_tool(self):
+		return self.parent_tool != None
+
+	def is_parent_tool(self, parent_ids = None):
+		if not parent_ids:
+			parent_ids = Tool.objects.filter(parent_tool__isnull=False).values_list('parent_tool_id', flat=True)
+		return self.id in parent_ids
+
+	def tool_or_parent_id(self):
+		""" This method returns the tool id or the parent tool id if tool is a child """
+		if self.is_child_tool():
+			return self.parent_tool.id
+		else:
+			return self.id
+
+	def get_family_tool_ids(self):
+		""" this method returns a list of children tool ids, parent and self id """
+		tool_ids = list(self.tool_children_set.values_list('id', flat=True))
+		# parent tool
+		if self.is_child_tool():
+			tool_ids.append(self.parent_tool.id)
+		# self
+		tool_ids.append(self.id)
+		return tool_ids
+
+	def raise_setter_error_if_child_tool(self, field):
+		if self.is_child_tool():
+			raise AttributeError(f"Cannot set property {field} on a child/alternate tool")
 
 	def __str__(self):
 		return self.name
 
 	def get_absolute_url(self):
 		from django.urls import reverse
-		return reverse('tool_control', args=[self.id])
+		return reverse('tool_control', args=[self.tool_or_parent_id()])
+
+	def name_display(self):
+		return f"{self.name} ({self.parent_tool.name})" if self.is_child_tool() else f"{self.name}"
+	name_display.admin_order_field = '_name'
+	name_display.short_description = 'Name'
+
+	def operational_display(self):
+		return self.operational
+	operational_display.admin_order_field = '_operational'
+	operational_display.boolean = True
+	operational_display.short_description = 'Operational'
 
 	def problematic(self):
-		return self.task_set.filter(resolved=False, cancelled=False).exists()
+		return self.parent_tool.task_set.filter(resolved=False, cancelled=False).exists() if self.is_child_tool() else self.task_set.filter(resolved=False, cancelled=False).exists()
 	problematic.admin_order_field = 'task'
 	problematic.boolean = True
 
 	def problems(self):
-		return self.task_set.filter(resolved=False, cancelled=False)
+		return self.parent_tool.task_set.filter(resolved=False, cancelled=False) if self.is_child_tool() else self.task_set.filter(resolved=False, cancelled=False)
 
 	def comments(self):
 		unexpired = Q(expiration_date__isnull=True) | Q(expiration_date__gt=timezone.now())
-		return self.comment_set.filter(visible=True).filter(unexpired)
+		return self.parent_tool.comment_set.filter(visible=True).filter(unexpired) if self.is_child_tool() else self.comment_set.filter(visible=True).filter(unexpired)
 
 	def required_resource_is_unavailable(self):
-		return self.required_resource_set.filter(available=False).exists()
+		return self.parent_tool.required_resource_set.filter(available=False).exists() if self.is_child_tool() else self.required_resource_set.filter(available=False).exists()
 
 	def nonrequired_resource_is_unavailable(self):
-		return self.nonrequired_resource_set.filter(available=False).exists()
+		return self.parent_tool.nonrequired_resource_set.filter(available=False).exists() if self.is_child_tool() else self.nonrequired_resource_set.filter(available=False).exists()
 
 	def all_resources_available(self):
 		required_resources_available = not self.unavailable_required_resources().exists()
@@ -300,41 +610,41 @@ class Tool(models.Model):
 		return False
 
 	def unavailable_required_resources(self):
-		return self.required_resource_set.filter(available=False)
+		return self.parent_tool.required_resource_set.filter(available=False) if self.is_child_tool() else self.required_resource_set.filter(available=False)
 
 	def unavailable_nonrequired_resources(self):
-		return self.nonrequired_resource_set.filter(available=False)
+		return self.parent_tool.nonrequired_resource_set.filter(available=False) if self.is_child_tool() else self.nonrequired_resource_set.filter(available=False)
 
 	def in_use(self):
-		result = UsageEvent.objects.filter(tool=self.id, end=None).exists()
+		result = UsageEvent.objects.filter(tool_id__in=self.get_family_tool_ids(), end=None).exists()
 		return result
 
 	def delayed_logoff_in_progress(self):
-		result = UsageEvent.objects.filter(tool=self.id, end__gt=timezone.now()).exists()
+		result = UsageEvent.objects.filter(tool_id__in=self.get_family_tool_ids(), end__gt=timezone.now()).exists()
 		return result
 
 	def get_delayed_logoff_usage_event(self):
 		try:
-			return UsageEvent.objects.get(tool=self.id, end__gt=timezone.now())
+			return UsageEvent.objects.get(tool_id__in=self.get_family_tool_ids(), end__gt=timezone.now())
 		except UsageEvent.DoesNotExist:
 			return None
 
 	def scheduled_outages(self):
 		""" Returns a QuerySet of scheduled outages that are in progress for this tool. This includes tool outages, and resources outages (when the tool fully depends on the resource). """
-		return ScheduledOutage.objects.filter(Q(tool=self.id) | Q(resource__fully_dependent_tools__in=[self.id]), start__lte=timezone.now(), end__gt=timezone.now())
+		return ScheduledOutage.objects.filter(Q(tool=self.tool_or_parent_id()) | Q(resource__fully_dependent_tools__in=[self.tool_or_parent_id()]), start__lte=timezone.now(), end__gt=timezone.now())
 
 	def scheduled_outage_in_progress(self):
 		""" Returns a true if a tool or resource outage is currently in effect for this tool. Otherwise, returns false. """
-		return ScheduledOutage.objects.filter(Q(tool=self.id) | Q(resource__fully_dependent_tools__in=[self.id]), start__lte=timezone.now(), end__gt=timezone.now()).exists()
+		return ScheduledOutage.objects.filter(Q(tool=self.tool_or_parent_id()) | Q(resource__fully_dependent_tools__in=[self.tool_or_parent_id()]), start__lte=timezone.now(), end__gt=timezone.now()).exists()
 
 	def is_configurable(self):
-		return self.configuration_set.exists()
+		return self.parent_tool.configuration_set.exists() if self.is_child_tool() else self.configuration_set.exists()
 	is_configurable.admin_order_field = 'configuration'
 	is_configurable.boolean = True
 	is_configurable.short_description = 'Configurable'
 
 	def get_configuration_information(self, user, start):
-		configurations = self.configuration_set.all().order_by('display_priority')
+		configurations = self.parent_tool.configuration_set.all().order_by('display_priority') if self.is_child_tool() else self.configuration_set.all().order_by('display_priority')
 		notice_limit = 0
 		able_to_self_configure = True
 		for config in configurations:
@@ -354,7 +664,7 @@ class Tool(models.Model):
 
 	def configuration_widget(self, user):
 		config_input = {
-			'configurations': self.configuration_set.all().order_by('display_priority'),
+			'configurations': self.parent_tool.configuration_set.all().order_by('display_priority') if self.is_child_tool() else self.configuration_set.all().order_by('display_priority'),
 			'user': user
 		}
 		configurations = ConfigurationEditor()
@@ -363,7 +673,7 @@ class Tool(models.Model):
 	def get_current_usage_event(self):
 		""" Gets the usage event for the current user of this tool. """
 		try:
-			return UsageEvent.objects.get(end=None, tool=self.id)
+			return UsageEvent.objects.get(end=None, tool_id__in=self.get_family_tool_ids())
 		except UsageEvent.DoesNotExist:
 			return None
 
@@ -644,11 +954,11 @@ class Consumable(models.Model):
 		return self.name
 
 class ConsumableWithdraw(models.Model):
-	customer = models.ForeignKey(User, related_name="consumable_user", help_text="The user who will use the consumable item.")
-	merchant = models.ForeignKey(User, related_name="consumable_merchant", help_text="The staff member that performed the withdraw.")
-	consumable = models.ForeignKey(Consumable)
+	customer = models.ForeignKey(User, related_name="consumable_user", help_text="The user who will use the consumable item.", on_delete=models.CASCADE)
+	merchant = models.ForeignKey(User, related_name="consumable_merchant", help_text="The staff member that performed the withdraw.", on_delete=models.CASCADE)
+	consumable = models.ForeignKey(Consumable, on_delete=models.CASCADE)
 	quantity = models.PositiveIntegerField()
-	project = models.ForeignKey(Project, help_text="The withdraw will be billed to this project.")
+	project = models.ForeignKey(Project, help_text="The withdraw will be billed to this project.", on_delete=models.CASCADE)
 	date = models.DateTimeField(default=timezone.now, help_text="The date and time when the user withdrew the consumable.")
 
 	class Meta:
@@ -669,7 +979,7 @@ class StockroomCategory(models.Model):
 
 class StockroomItem(models.Model):
 	name = models.CharField(max_length=100)
-	category = models.ForeignKey('StockroomCategory', blank=True, null=True)
+	category = models.ForeignKey('StockroomCategory', blank=True, null=True, on_delete=models.CASCADE)
 	quantity = models.IntegerField(help_text="The number of items currently in stock.")
 	cost = models.DecimalField(decimal_places=2, max_digits=6, default=0.00, help_text="The cost of this item")
 	visible = models.BooleanField(default=True)
@@ -697,6 +1007,7 @@ class StockroomWithdraw(models.Model):
 		return str(self.id)
 
 class InterlockCard(models.Model):
+	name = models.CharField(max_length=100, blank=True, null=True)
 	server = models.CharField(max_length=100)
 	port = models.PositiveIntegerField()
 	number = models.PositiveIntegerField(blank=True, null=True)
@@ -711,7 +1022,8 @@ class InterlockCard(models.Model):
 		ordering = ['server', 'number']
 
 	def __str__(self):
-		return str(self.server) + (', card ' + str(self.number) if self.number else '')
+		card_name = self.name + ': ' if self.name else ''
+		return card_name + str(self.server) + (', card ' + str(self.number) if self.number else '')
 
 
 class Interlock(models.Model):
@@ -816,6 +1128,31 @@ class TaskImages(models.Model):
 		verbose_name_plural = "Task images"
 		ordering = ['-uploaded_at']
 
+
+# # These two auto-delete tool images from filesystem when they are unneeded:
+# @receiver(models.signals.post_delete, sender=Tool)
+# def auto_delete_file_on_tool_delete(sender, instance: Tool, **kwargs):
+# 	"""	Deletes file from filesystem when corresponding `Tool` object is deleted.	"""
+# 	if instance.image:
+# 		if os.path.isfile(instance.image.path):
+# 			os.remove(instance.image.path)
+#
+# 
+# @receiver(models.signals.pre_save, sender=Tool)
+# def auto_delete_file_on_tool_change(sender, instance: Tool, **kwargs):
+# 	"""	Deletes old file from filesystem when corresponding `Tool` object is updated with new file. """
+# 	if not instance.pk:
+# 		return False
+# 	try:
+# 		old_file = Tool.objects.get(pk=instance.pk).image
+# 	except Tool.DoesNotExist:
+# 		return False
+#
+# 	if old_file:
+# 		new_file = instance.image
+# 		if not old_file == new_file:
+# 			if os.path.isfile(old_file.path):
+# 				os.remove(old_file.path)
 
 # These two auto-delete task images from filesystem when they are unneeded:
 @receiver(models.signals.post_delete, sender=TaskImages)
@@ -931,6 +1268,12 @@ class Resource(models.Model):
 	class Meta:
 		ordering = ['name']
 
+	def visible_fully_dependent_tools(self):
+		return self.fully_dependent_tools.filter(visible=True)
+
+	def visible_partially_dependent_tools(self):
+		return self.partially_dependent_tools.filter(visible=True)
+
 	def __str__(self):
 		return self.name
 
@@ -1005,6 +1348,18 @@ class MembershipHistory(models.Model):
 	def __str__(self):
 		return "Membership change for " + str(self.parent_content_type) + " " + str(self.parent_object_id)
 
+	def get_child_content_object(self):
+		if self.child_content_object is None:
+			return "<deleted>"
+		else:
+			return str(self.child_content_object)
+
+	def get_parent_content_object(self):
+		if self.parent_content_object is None:
+			return "<deleted>"
+		else:
+			return str(self.parent_content_object)
+
 
 def calculate_duration(start, end, unfinished_reason):
 	"""
@@ -1045,6 +1400,7 @@ class PhysicalAccessLevel(models.Model):
 			(WEEKENDS, "Weekends"),
 		)
 	schedule = models.IntegerField(choices=Schedule.Choices)
+	allow_staff_access = models.BooleanField(blank=False, null=False, default=False, help_text="Check this box to allow access to Staff users without explicitly granting them access")
 
 	def accessible(self):
 		now = timezone.localtime(timezone.now())
@@ -1115,8 +1471,20 @@ class SafetyIssue(models.Model):
 		return reverse('update_safety_issue', args=[self.id])
 
 
+class AlertCategory(models.Model):
+	name = models.CharField(max_length=200)
+
+	class Meta:
+		ordering = ['name']
+		verbose_name_plural = "Alert categories"
+
+	def __str__(self):
+		return self.name
+
+
 class Alert(models.Model):
 	title = models.CharField(blank=True, max_length=100)
+	category = models.CharField(blank=True, max_length=200,	help_text="A category/type for this alert.")
 	contents = models.CharField(max_length=500)
 	creation_time = models.DateTimeField(default=timezone.now)
 	creator = models.ForeignKey(User, null=True, blank=True, related_name='+', on_delete=models.SET_NULL)
@@ -1124,6 +1492,8 @@ class Alert(models.Model):
 	expiration_time = models.DateTimeField(null=True, blank=True, help_text='The alert can be deleted after the expiration time is reached.')
 	user = models.ForeignKey(User, null=True, blank=True, related_name='alerts', help_text='The alert will be visible for this user. The alert is visible to all users when this is empty.', on_delete=models.CASCADE)
 	dismissible = models.BooleanField(default=False, help_text="Allows the user to delete the alert. This is only valid when the 'user' field is set.")
+	expired = models.BooleanField(default=False, help_text="Indicates the alert has expired and won't be shown anymore")
+	deleted = models.BooleanField(default=False, help_text="Indicates the alert has been deleted and won't be shown anymore")
 
 	class Meta:
 		ordering = ['-debut_time']
@@ -1371,3 +1741,90 @@ class Sensor(models.Model):
 
 	def __str__(self):
 		return str(self.id)
+
+def record_remote_many_to_many_changes_and_save(request, obj, form, change, many_to_many_field, save_function_pointer):
+	"""
+	Record the changes in a many-to-many field that the model does not own. Then, save the many-to-many field.
+	"""
+	# If the model object is being changed then we can get the list of previous members.
+	if change:
+		original_members = set(obj.user_set.all())
+	else:  # The model object is being created (instead of changed) so we can assume there are no members (initially).
+		original_members = set()
+	current_members = set(form.cleaned_data[many_to_many_field])
+	added_members = []
+	removed_members = []
+
+	# Log membership changes if they occurred.
+	symmetric_difference = original_members ^ current_members
+	if symmetric_difference:
+		if change:  # the members have changed, so find out what was added and removed...
+			# We can can see the previous members of the object model by looking it up
+			# in the database because the member list hasn't been committed yet.
+			added_members = set(current_members) - set(original_members)
+			removed_members = set(original_members) - set(current_members)
+
+		else:  # a model object is being created (instead of changed) so we can assume all the members are new...
+			added_members = form.cleaned_data[many_to_many_field]
+
+	# A primary key for the object is required to make many-to-many field changes.
+	# If the object is being changed then it has already been assigned a primary key.
+	if not change:
+		save_function_pointer(request, obj, form, change)
+	obj.user_set.set(form.cleaned_data[many_to_many_field])
+	save_function_pointer(request, obj, form, change)
+
+	# Record which members were added to the object.
+	for user in added_members:
+		new_member = MembershipHistory()
+		new_member.authorizer = request.user
+		new_member.parent_content_object = obj
+		new_member.child_content_object = user
+		new_member.action = MembershipHistory.Action.ADDED
+		new_member.save()
+
+	# Record which members were removed from the object.
+	for user in removed_members:
+		ex_member = MembershipHistory()
+		ex_member.authorizer = request.user
+		ex_member.parent_content_object = obj
+		ex_member.child_content_object = user
+		ex_member.action = MembershipHistory.Action.REMOVED
+		ex_member.save()
+
+
+def record_local_many_to_many_changes(request, obj, form, many_to_many_field):
+	"""
+	Record the changes in a many-to-many field that the model owns.
+	"""
+	if many_to_many_field in form.changed_data:
+		original_members = set(getattr(obj, many_to_many_field).all())
+		current_members = set(form.cleaned_data[many_to_many_field])
+		added_members = set(current_members) - set(original_members)
+		for a in added_members:
+			p = MembershipHistory()
+			p.action = MembershipHistory.Action.ADDED
+			p.authorizer = request.user
+			p.child_content_object = obj
+			p.parent_content_object = a
+			p.save()
+		removed_members = set(original_members) - set(current_members)
+		for a in removed_members:
+			p = MembershipHistory()
+			p.action = MembershipHistory.Action.REMOVED
+			p.authorizer = request.user
+			p.child_content_object = obj
+			p.parent_content_object = a
+			p.save()
+
+
+def record_active_state(request, obj, form, field_name, is_initial_creation):
+	"""
+	Record whether the account, project, or user is active when the active state is changed.
+	"""
+	if field_name in form.changed_data or is_initial_creation:
+		activity_entry = ActivityHistory()
+		activity_entry.authorizer = request.user
+		activity_entry.action = getattr(obj, field_name)
+		activity_entry.content_object = obj
+		activity_entry.save()

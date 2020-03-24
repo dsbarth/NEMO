@@ -1,11 +1,13 @@
-from datetime import timedelta
+from datetime import timedelta, date
 
 from django.db.models import Q
 from django.http import HttpResponse, HttpResponseBadRequest
 from django.template import Template, Context
 from django.utils import timezone
 
-from NEMO.models import Reservation, AreaAccessRecord, ScheduledOutage, Tool
+from NEMO.exceptions import InactiveUserError, NoActiveProjectsForUserError, PhysicalAccessExpiredUserError, \
+	NoPhysicalAccessUserError, NoAccessiblePhysicalAccessUserError, UnavailableResourcesUserError
+from NEMO.models import Reservation, AreaAccessRecord, ScheduledOutage, User, Area, PhysicalAccessLevel, Tool
 from NEMO.utilities import format_datetime, send_mail
 from NEMO.views.customization import get_customization, get_media_file_contents
 
@@ -15,8 +17,9 @@ def check_policy_to_enable_tool(tool, operator, user, project, staff_charge):
 	Check that the user is allowed to enable the tool. Enable the tool if the policy checks pass.
 	"""
 
-	# The tool must be visible to users.
-	if not tool.visible:
+	# The tool must be visible (or the parent if it's a child tool) to users.
+	visible = tool.parent_tool.visible if tool.is_child_tool() else tool.visible
+	if not visible:
 		return HttpResponseBadRequest("This tool is currently hidden from users.")
 
 	# The tool must be operational.
@@ -29,8 +32,9 @@ def check_policy_to_enable_tool(tool, operator, user, project, staff_charge):
 	if current_usage_event:
 		return HttpResponseBadRequest("The tool is currently being used by " + str(current_usage_event.user) + ".")
 
-	# The user must be qualified to use the tool.
-	if tool not in operator.qualifications.all() and not operator.is_staff:
+	# The user must be qualified to use the tool itself, or the parent tool in case of alternate tool.
+	tool_to_check_qualifications = tool.parent_tool if tool.is_child_tool() else tool
+	if tool_to_check_qualifications not in operator.qualifications.all() and not operator.is_staff:
 		return HttpResponseBadRequest("You are not qualified to use this tool.")
 
 	# Only staff members can operate a tool on behalf of another user.
@@ -357,3 +361,37 @@ def check_policy_to_create_outage(outage):
 
 	# No policy issues! The outage can be created...
 	return None
+
+
+def check_policy_to_enter_any_area(user: User):
+	"""
+	Checks the area access policy for a user.
+	"""
+	if not user.is_active:
+		raise InactiveUserError(user=user)
+
+	if user.active_project_count() < 1:
+		raise NoActiveProjectsForUserError(user=user)
+
+	if user.access_expiration is not None and user.access_expiration < date.today():
+		raise PhysicalAccessExpiredUserError(user=user)
+
+	user_has_access_to_at_least_one_area = user.physical_access_levels.all().exists()
+	staff_has_access_to_at_least_one_area = user.is_staff and PhysicalAccessLevel.objects.filter(allow_staff_access=True).exists()
+	if not (user_has_access_to_at_least_one_area or staff_has_access_to_at_least_one_area):
+		raise NoPhysicalAccessUserError(user=user)
+
+
+def check_policy_to_enter_this_area(area: Area, user: User):
+	# If explicitly set on the Physical Access Level, staff may be exempt from being granted explicit access
+	if user.is_staff and any([access_level.accessible() for access_level in PhysicalAccessLevel.objects.filter(allow_staff_access=True, area=area)]):
+		pass
+	else:
+		# Check if the user normally has access to this area door at the current time
+		if not any([access_level.accessible() for access_level in user.physical_access_levels.filter(area=area)]):
+			raise NoAccessiblePhysicalAccessUserError(user=user)
+
+	if not user.is_staff:
+		unavailable_resources = area.required_resources.filter(available=False)
+		if unavailable_resources:
+			raise UnavailableResourcesUserError(user=user)

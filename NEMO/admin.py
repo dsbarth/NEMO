@@ -1,115 +1,32 @@
+from json import loads
 from django import forms
 from django.contrib import admin
 from django.contrib.admin import register
 from django.contrib.admin.widgets import FilteredSelectMultiple
 from django.contrib.auth.models import Permission
 
-from NEMO.actions import lock_selected_interlocks, synchronize_with_tool_usage, unlock_selected_interlocks
-from NEMO.forms import InterlockCardForm
+from NEMO.actions import lock_selected_interlocks, synchronize_with_tool_usage, unlock_selected_interlocks, duplicate_tool_configuration
+#from NEMO.forms import InterlockCardForm
 from NEMO.models import Account, ActivityHistory, Alert, Area, AreaAccessRecord, ChemicalRequest, Comment, Configuration, \
 	ConfigurationHistory, Consumable, ConsumableCategory, ConsumableWithdraw, ContactInformation, \
 	ContactInformationCategory, Customization, Door, Interlock, InterlockCard, LandingPageChoice, MembershipHistory, \
 	News, Notification, PhysicalAccessLevel, PhysicalAccessLog, Project, Reservation, Resource, ResourceCategory, \
 	SafetyIssue, ScheduledOutage, ScheduledOutageCategory, Sensor, StockroomItem, StockroomWithdraw, StockroomCategory, StaffCharge, Task, TaskCategory, TaskHistory, TaskStatus, \
-	Tool, TrainingSession, UsageEvent, User, UserChemical, UserType, UserPreferences, TaskImages, InterlockCardCategory
+	Tool, TrainingSession, UsageEvent, User, UserChemical, UserType, UserPreferences, TaskImages, InterlockCardCategory, \
+	record_remote_many_to_many_changes_and_save, record_local_many_to_many_changes, record_active_state, AlertCategory
 
 admin.site.site_header = "NEMO"
 admin.site.site_title = "NEMO"
 admin.site.index_title = "Detailed administration"
 
 
-def record_remote_many_to_many_changes_and_save(request, obj, form, change, many_to_many_field, save_function_pointer):
-	"""
-	Record the changes in a many-to-many field that the model does not own. Then, save the many-to-many field.
-	"""
-	# If the model object is being changed then we can get the list of previous members.
-	if change:
-		original_members = set(obj.user_set.all())
-	else:  # The model object is being created (instead of changed) so we can assume there are no members (initially).
-		original_members = set()
-	current_members = set(form.cleaned_data[many_to_many_field])
-	added_members = []
-	removed_members = []
-
-	# Log membership changes if they occurred.
-	symmetric_difference = original_members ^ current_members
-	if symmetric_difference:
-		if change:  # the members have changed, so find out what was added and removed...
-			# We can can see the previous members of the object model by looking it up
-			# in the database because the member list hasn't been committed yet.
-			added_members = set(current_members) - set(original_members)
-			removed_members = set(original_members) - set(current_members)
-
-		else:  # a model object is being created (instead of changed) so we can assume all the members are new...
-			added_members = form.cleaned_data[many_to_many_field]
-
-	# A primary key for the object is required to make many-to-many field changes.
-	# If the object is being changed then it has already been assigned a primary key.
-	if not change:
-		save_function_pointer(request, obj, form, change)
-	obj.user_set = form.cleaned_data[many_to_many_field]
-	save_function_pointer(request, obj, form, change)
-
-	# Record which members were added to the object.
-	for user in added_members:
-		new_member = MembershipHistory()
-		new_member.authorizer = request.user
-		new_member.parent_content_object = obj
-		new_member.child_content_object = user
-		new_member.action = MembershipHistory.Action.ADDED
-		new_member.save()
-
-	# Record which members were removed from the object.
-	for user in removed_members:
-		ex_member = MembershipHistory()
-		ex_member.authorizer = request.user
-		ex_member.parent_content_object = obj
-		ex_member.child_content_object = user
-		ex_member.action = MembershipHistory.Action.REMOVED
-		ex_member.save()
-
-
-def record_local_many_to_many_changes(request, obj, form, many_to_many_field):
-	"""
-	Record the changes in a many-to-many field that the model owns.
-	"""
-	if many_to_many_field in form.changed_data:
-		original_members = set(getattr(obj, many_to_many_field).all())
-		current_members = set(form.cleaned_data[many_to_many_field])
-		added_members = set(current_members) - set(original_members)
-		for a in added_members:
-			p = MembershipHistory()
-			p.action = MembershipHistory.Action.ADDED
-			p.authorizer = request.user
-			p.child_content_object = obj
-			p.parent_content_object = a
-			p.save()
-		removed_members = set(original_members) - set(current_members)
-		for a in removed_members:
-			p = MembershipHistory()
-			p.action = MembershipHistory.Action.REMOVED
-			p.authorizer = request.user
-			p.child_content_object = obj
-			p.parent_content_object = a
-			p.save()
-
-
-def record_active_state(request, obj, form, field_name, is_initial_creation):
-	"""
-	Record whether the account, project, or user is active when the active state is changed.
-	"""
-	if field_name in form.changed_data or is_initial_creation:
-		activity_entry = ActivityHistory()
-		activity_entry.authorizer = request.user
-		activity_entry.action = getattr(obj, field_name)
-		activity_entry.content_object = obj
-		activity_entry.save()
-
-
 class ToolAdminForm(forms.ModelForm):
 	class Meta:
 		model = Tool
 		fields = '__all__'
+
+	class Media:
+		js = ("tool_form_admin.js",)
 
 	qualified_users = forms.ModelMultipleChoiceField(
 		queryset=User.objects.all(),
@@ -120,7 +37,7 @@ class ToolAdminForm(forms.ModelForm):
 		)
 	)
 
-	backup_owners = forms.ModelMultipleChoiceField(
+	_backup_owners = forms.ModelMultipleChoiceField(
 		queryset=User.objects.all(),
 		required=False,
 		widget=FilteredSelectMultiple(
@@ -157,40 +74,96 @@ class ToolAdminForm(forms.ModelForm):
 
 	def clean(self):
 		cleaned_data = super().clean()
-		policy_off_between_times = cleaned_data.get("policy_off_between_times")
-		policy_off_start_time = cleaned_data.get("policy_off_start_time")
-		policy_off_end_time = cleaned_data.get("policy_off_end_time")
-		if policy_off_between_times and (not policy_off_start_time or not policy_off_end_time):
-			if not policy_off_start_time:
-				self.add_error("policy_off_start_time", "Start time must be specified")
-			if not policy_off_end_time:
-				self.add_error("policy_off_end_time", "End time must be specified")
+		parent_tool = cleaned_data.get("parent_tool")
+		category = cleaned_data.get("_category")
+		location = cleaned_data.get("_location")
+		phone_number = cleaned_data.get("_phone_number")
+		primary_owner = cleaned_data.get("_primary_owner")
+		image = cleaned_data.get("_image")
+
+		if image:
+			from NEMO.utilities import resize_image
+			# resize image to 500x500 maximum
+			cleaned_data['_image'] = resize_image(image, 500)
+
+		if parent_tool:
+			if parent_tool.id == self.instance.id:
+				self.add_error('parent_tool', 'You cannot select the parent to be the tool itself.')
+			# in case of alternate tool, remove everything except parent_tool and name
+			data = dict([(k, v) for k, v in self.cleaned_data.items() if k == "parent_tool" or k == "name"])
+			# an alternate tool is never visible
+			data['visible'] = False
+			return data
+		else:
+			if not category:
+				self.add_error('_category', 'This field is required.')
+			if not location:
+				self.add_error('_location', 'This field is required.')
+			if not phone_number:
+				self.add_error('_phone_number', 'This field is required.')
+			if not primary_owner:
+				self.add_error('_primary_owner', 'This field is required.')
+
+			post_usage_questions = cleaned_data.get("_post_usage_questions")
+			# Validate _post_usage_questions JSON format
+			if post_usage_questions:
+				try:
+					loads(post_usage_questions)
+				except ValueError as error:
+					self.add_error("_post_usage_questions", "This field needs to be a valid JSON string")
+
+			policy_off_between_times = cleaned_data.get("_policy_off_between_times")
+			policy_off_start_time = cleaned_data.get("_policy_off_start_time")
+			policy_off_end_time = cleaned_data.get("_policy_off_end_time")
+			if policy_off_between_times and (not policy_off_start_time or not policy_off_end_time):
+				if not policy_off_start_time:
+					self.add_error("_policy_off_start_time", "Start time must be specified")
+				if not policy_off_end_time:
+					self.add_error("_policy_off_end_time", "End time must be specified")
 
 
 @register(Tool)
 class ToolAdmin(admin.ModelAdmin):
-	list_display = ('name', 'category', 'visible', 'operational', 'problematic', 'is_configurable')
-	list_filter = ('visible', 'operational', 'category')
+	list_display = ('name_display', '_category', 'visible', 'operational_display', 'problematic', 'is_configurable')
+	search_fields = ('name', '_description', '_serial')
+	list_filter = ('visible', '_operational', '_category', '_location')
+	actions = [duplicate_tool_configuration]
 	form = ToolAdminForm
 	fieldsets = (
-		(None, {'fields': ('name', 'category', 'qualified_users', 'post_usage_questions'),}),
-		('Current state', {'fields': ('visible', 'operational'),}),
-		('Contact information', {'fields': ('primary_owner', 'backup_owners', 'notification_email_address', 'location', 'phone_number'),}),
-		('Reservation', {'fields': ('reservation_horizon', 'missed_reservation_threshold'),}),
-		('Usage policy', {'fields': ('policy_off_between_times', 'policy_off_start_time', 'policy_off_end_time', 'policy_off_weekend', 'minimum_usage_block_time', 'maximum_usage_block_time', 'maximum_reservations_per_day', 'minimum_time_between_reservations', 'maximum_future_reservation_time',),}),
-		('Area Access', {'fields': ('requires_area_access', 'grant_physical_access_level_upon_qualification', 'grant_badge_reader_access_upon_qualification', 'interlock', 'allow_delayed_logoff', 'reservation_required'),}),
+		(None, {'fields': ('name', 'parent_tool', '_category', 'qualified_users', '_post_usage_questions'),}),
+		('Additional Information', {'fields': ('_description', '_serial', '_image'),}),
+		('Current state', {'fields': ('visible', '_operational'),}),
+		('Contact information', {'fields': ('_primary_owner', '_backup_owners', '_notification_email_address', '_location', '_phone_number'),}),
+		('Reservation', {'fields': ('_reservation_horizon', '_missed_reservation_threshold'),}),
+		('Usage policy', {'fields': ('_policy_off_between_times', '_policy_off_start_time', '_policy_off_end_time', '_policy_off_weekend', '_minimum_usage_block_time', '_maximum_usage_block_time', '_maximum_reservations_per_day', '_minimum_time_between_reservations', '_maximum_future_reservation_time',),}),
+		('Area Access', {'fields': ('_requires_area_access', '_grant_physical_access_level_upon_qualification', '_grant_badge_reader_access_upon_qualification', '_interlock', '_allow_delayed_logoff', '_reservation_required'),}),
 		('Dependencies', {'fields': ('required_resources', 'nonrequired_resources'),}),
 	)
+
+	def formfield_for_foreignkey(self, db_field, request, **kwargs):
+		""" We only want non children tool to be eligible as parents """
+		if db_field.name == "parent_tool":
+			kwargs["queryset"] = Tool.objects.filter(parent_tool__isnull=True)
+		return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
 	def save_model(self, request, obj, form, change):
 		"""
 		Explicitly record any project membership changes.
 		"""
-		record_remote_many_to_many_changes_and_save(request, obj, form, change, 'qualified_users', super(ToolAdmin, self).save_model)
-		if 'required_resources' in form.changed_data:
-			obj.required_resource_set = form.cleaned_data['required_resources']
-		if 'nonrequired_resources' in form.changed_data:
-			obj.nonrequired_resource_set = form.cleaned_data['nonrequired_resources']
+
+		if obj.parent_tool:
+			if obj.pk:
+				# if this is an update (from regular to child tool), we want to make sure we are creating a clean version. In case the previous tool had fields that are now irrelevant
+				clean_alt_tool = Tool(**form.cleaned_data)
+				clean_alt_tool.pk = obj.pk
+				obj = clean_alt_tool
+			super(ToolAdmin, self).save_model(request, obj, form, change)
+		else:
+			record_remote_many_to_many_changes_and_save(request, obj, form, change, 'qualified_users', super(ToolAdmin, self).save_model)
+			if 'required_resources' in form.changed_data:
+				obj.required_resource_set.set(form.cleaned_data['required_resources'])
+			if 'nonrequired_resources' in form.changed_data:
+				obj.nonrequired_resource_set.set(form.cleaned_data['nonrequired_resources'])
 
 
 @register(TrainingSession)
@@ -342,10 +315,27 @@ class StockroomWithdrawAdmin(admin.ModelAdmin):
 	list_filter = ('date', 'stock')
 	date_hierarchy = 'date'
 
+class InterlockCardAdminForm(forms.ModelForm):
+	class Meta:
+		model = InterlockCard
+		widgets = {
+			'password': forms.PasswordInput(render_value=True),
+		}
+		fields = '__all__'
+
+	def clean(self):
+		if any(self.errors):
+			return
+		super(InterlockCardAdminForm, self).clean()
+		category = self.cleaned_data['category']
+		from NEMO import interlocks
+		interlocks.get(category, False).clean_interlock_card(self)
+
+
 @register(InterlockCard)
 class InterlockCardAdmin(admin.ModelAdmin):
-	form = InterlockCardForm
-	list_display = ('server', 'port', 'number', 'category', 'even_port', 'odd_port')
+	form = InterlockCardAdminForm
+	list_display = ('name', 'server', 'port', 'number', 'category', 'even_port', 'odd_port')
 
 
 @register(Interlock)
@@ -444,6 +434,11 @@ class UserAdmin(admin.ModelAdmin):
 	list_display = ('first_name', 'last_name', 'username', 'email', 'badge_number', 'is_active', 'is_staff', 'is_superuser', 'access_expiration', 'date_joined', 'last_login')
 	list_filter = ('is_active', 'domain', 'is_staff', 'is_technician', 'is_superuser', 'date_joined', 'last_login')
 
+	def formfield_for_manytomany(self, db_field, request, **kwargs):
+		if db_field.name == "qualifications":
+			kwargs["queryset"] = Tool.objects.filter(parent_tool__isnull=True)
+		return super().formfield_for_manytomany(db_field, request, **kwargs)
+
 	def save_model(self, request, obj, form, change):
 		""" Audit project membership and qualifications when a user is saved. """
 		super(UserAdmin, self).save_model(request, obj, form, change)
@@ -474,9 +469,23 @@ class DoorAdmin(admin.ModelAdmin):
 	list_display = ('name', 'area', 'interlock', 'get_absolute_url')
 
 
+@register(AlertCategory)
+class AlertCategoryAdmin(admin.ModelAdmin):
+	list_display = ('name',)
+
+
+class AlertAdminForm(forms.ModelForm):
+	contents = forms.CharField(widget=forms.Textarea(attrs={'rows':3, 'cols': 50}),)
+
+	class Meta:
+		model = Alert
+		fields = '__all__'
+
+
 @register(Alert)
 class AlertAdmin(admin.ModelAdmin):
-	list_display = ('title', 'creation_time', 'creator', 'debut_time', 'expiration_time', 'user', 'dismissible')
+	list_display = ('title', 'category', 'creation_time', 'creator', 'debut_time', 'expiration_time', 'user', 'dismissible', 'expired', 'deleted')
+	form = AlertAdminForm
 
 
 @register(PhysicalAccessLevel)

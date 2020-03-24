@@ -55,8 +55,8 @@ def create(request):
 		# Shut down the tool.
 		task.tool.operational = False
 		task.tool.save()
-		# End any usage events in progress for the tool.
-		UsageEvent.objects.filter(tool=task.tool, end=None).update(end=timezone.now())
+		# End any usage events in progress for the tool or the tool's children.
+		UsageEvent.objects.filter(tool_id__in=task.tool.get_family_tool_ids(), end=None).update(end=timezone.now())
 		# Lock the interlock for this tool.
 		try:
 			tool_interlock = Interlock.objects.get(tool__id=task.tool.id)
@@ -91,7 +91,10 @@ def send_new_task_emails(request, task: Task, task_images: List[TaskImages]):
 		# Send an email to the appropriate NanoFab staff that a new task has been created:
 		subject = ('SAFETY HAZARD: ' if task.safety_hazard else '') + task.tool.name + (' shutdown' if task.force_shutdown else ' problem')
 		message = Template(message).render(Context(dictionary))
-		recipients = tuple([r for r in [task.tool.primary_owner.email, *task.tool.backup_owners.all().values_list('email', flat=True), task.tool.notification_email_address] if r])
+		managers = []
+		if hasattr(settings, 'LAB_MANAGERS'):
+			managers = settings.LAB_MANAGERS
+		recipients = tuple([r for r in [task.tool.primary_owner.email, *task.tool.backup_owners.all().values_list('email', flat=True), task.tool.notification_email_address, *managers] if r])
 		send_mail(subject, message, request.user.email, recipients, attachments)
 
 	# Send an email to all users (excluding staff) qualified on the tool:

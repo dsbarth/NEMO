@@ -307,18 +307,6 @@ Twitter Typeahead autocomplete dropdown menu isn't chopped off. */
 	height: 19px;
 }
 
-body.logout-error {
-	background-color: red;
-}
-
-body.logout-warning {
-	background-color: orange;
-}
-
-body.logout-success {
-	background-color: green;
-}
-
 /* Customization of time picker CSS */
 .picker__list small {
     color: #999;

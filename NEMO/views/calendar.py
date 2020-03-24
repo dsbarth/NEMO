@@ -55,7 +55,7 @@ def calendar(request, tool_id=None):
 		else:
 			return redirect('choose_tool', 'view_calendar')
 
-	tools = Tool.objects.filter(visible=True).order_by('category', 'name')
+	tools = Tool.objects.filter(visible=True).order_by('_category', 'name')
 	rendered_tool_tree_html = ToolTree().render(None, {'tools': tools, 'user': request.user})
 	tool_summary = create_tool_summary(request)
 	dictionary = {
@@ -140,9 +140,9 @@ def usage_event_feed(request, start, end):
 	usage_events = usage_events.exclude(start__gt=end, end__gt=end)
 
 	# Filter events that only have to do with the relevant tool.
-	tool = request.GET.get('tool_id')
-	if tool:
-		usage_events = usage_events.filter(tool__id=tool)
+	tool_id = request.GET.get('tool_id')
+	if tool_id:
+		usage_events = usage_events.filter(tool__id__in=Tool.objects.get(pk=tool_id).get_family_tool_ids())
 
 	area_access_events = None
 	# Filter events that only have to do with the current user.
@@ -157,8 +157,8 @@ def usage_event_feed(request, start, end):
 	missed_reservations = None
 	if personal_schedule:
 		missed_reservations = Reservation.objects.filter(missed=True, user=request.user)
-	elif tool:
-		missed_reservations = Reservation.objects.filter(missed=True, tool=tool)
+	elif tool_id:
+		missed_reservations = Reservation.objects.filter(missed=True, tool=tool_id)
 	if missed_reservations:
 		missed_reservations = missed_reservations.exclude(start__lt=start, end__lt=start)
 		missed_reservations = missed_reservations.exclude(start__gt=end, end__gt=end)
@@ -260,7 +260,7 @@ def create_reservation(request):
 	# Make sure the user is actually enrolled on the project. We wouldn't want someone
 	# forging a request to reserve against a project they don't belong to.
 	if new_reservation.project not in new_reservation.user.active_projects():
-		return render(request, 'calendar/project_choice.html', {'active_projects': active_projects()})
+		return render(request, 'calendar/project_choice.html', {'active_projects': active_projects})
 
 	configured = (request.POST.get('configured') == "true")
 	# If a reservation is requested and the tool does not require configuration...
@@ -330,7 +330,7 @@ def create_outage(request):
 	outage.start = start
 	outage.end = end
 
-	# If there was a problem in saving the reservation then return the error...
+	# If there is a policy problem for the outage then return the error...
 	policy_problem = check_policy_to_create_outage(outage)
 	if policy_problem:
 		return HttpResponseBadRequest(policy_problem)
@@ -348,7 +348,7 @@ def create_outage(request):
 	outage.details = request.POST.get('details', '')
 
 	if request.POST.get('recurring_outage') == 'on':
-		# we have to remove tz before creating rules otherwise 8am would become 7am after DST change.
+		# we have to remove tz before creating rules otherwise 8am would become 7am after DST change for example.
 		start_no_tz = outage.start.replace(tzinfo=None)
 		end_no_tz = outage.end.replace(tzinfo=None)
 
@@ -357,7 +357,7 @@ def create_outage(request):
 		date_until = end.replace(hour=0, minute=0, second=0)
 		if submitted_date_until:
 			date_until = localize(datetime.strptime(submitted_date_until, '%m/%d/%Y'))
-		date_until += timedelta(days=1, seconds=-1)
+		date_until += timedelta(days=1, seconds=-1) # set at the end of the day
 		by_week_day = None
 		if submitted_frequency == 'DAILY_WEEKDAYS':
 			by_week_day = (rrule.MO, rrule.TU, rrule.WE, rrule.TH, rrule.FR)
@@ -432,7 +432,7 @@ def modify_reservation(request, start_delta, end_delta):
 	not be tied directly to a URL.
 	"""
 	try:
-		reservation_to_cancel = Reservation.objects.get(pk=request.POST['id'])
+		reservation_to_cancel = Reservation.objects.get(pk=request.POST.get('id'))
 	except Reservation.DoesNotExist:
 		return HttpResponseNotFound("The reservation that you wish to modify doesn't exist!")
 	response = check_policy_to_cancel_reservation(reservation_to_cancel, request.user)
@@ -480,7 +480,7 @@ def modify_reservation(request, start_delta, end_delta):
 
 def modify_outage(request, start_delta, end_delta):
 	try:
-		outage = ScheduledOutage.objects.get(pk=request.POST['id'])
+		outage = ScheduledOutage.objects.get(pk=request.POST.get('id'))
 	except ScheduledOutage.DoesNotExist:
 		return HttpResponseNotFound("The outage that you wish to modify doesn't exist!")
 	if start_delta:
@@ -834,7 +834,7 @@ def cancel_unused_reservations(request):
 	if not get_media_file_contents('missed_reservation_email.html'):
 		return HttpResponseNotFound('The missed reservation email template has not been customized for your organization yet. Please visit the NEMO customizable_key_values page to upload a template, then missed email notifications can be sent.')
 
-	tools = Tool.objects.filter(visible=True, operational=True, missed_reservation_threshold__isnull=False)
+	tools = Tool.objects.filter(visible=True, _operational=True, _missed_reservation_threshold__isnull=False)
 	missed_reservations = []
 	for tool in tools:
 		# If a tool is in use then there's no need to look for unused reservation time.
@@ -850,7 +850,7 @@ def cancel_unused_reservations(request):
 			if r.user.is_staff:
 				continue
 			# If there was no tool enable or disable event since the threshold timestamp then we assume the reservation has been missed.
-			if not (UsageEvent.objects.filter(tool=tool, start__gte=threshold).exists() or UsageEvent.objects.filter(tool=tool, end__gte=threshold).exists()):
+			if not (UsageEvent.objects.filter(tool_id__in=tool.get_family_tool_ids(), start__gte=threshold).exists() or UsageEvent.objects.filter(tool_id__in=tool.get_family_tool_ids(), end__gte=threshold).exists()):
 				# Mark the reservation as missed and notify the user & NanoFab staff.
 				r.missed = True
 				r.save()

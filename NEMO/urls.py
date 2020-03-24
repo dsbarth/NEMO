@@ -1,17 +1,25 @@
+import logging
+from importlib import import_module
+
+from django.apps import apps
 from django.conf import settings
 from django.conf.urls import include, url
 from django.contrib import admin
 from django.contrib.auth.decorators import login_required
+from django.urls import path
 from django.views.static import serve
 from rest_framework import routers
 from django.contrib.staticfiles.storage import staticfiles_storage
 from django.contrib.staticfiles.urls import staticfiles_urlpatterns
 from django.views.generic.base import RedirectView
 
-from NEMO.views import abuse, accounts_and_projects, alerts, api, area_access, authentication, calendar, configuration_agenda, consumables, contact_staff, customization, directory, email, feedback, get_projects, history, jumbotron, kiosk, landing, maintenance, mobile, usage, news, qualifications, remote_work, resources, safety, sensors, sidebar, staff_charges, status_dashboard, stockroom, tasks, tool_control, training, tutorials, users, user_chemicals, forgot_password, billing, consultation
+from NEMO.views import abuse, accounts_and_projects, alerts, api, area_access, authentication, calendar, configuration_agenda, consumables, contact_staff, customization, directory, email, feedback, get_projects, history, jumbotron, landing, maintenance, mobile, usage, news, qualifications, remote_work, resources, safety, sensors, sidebar, staff_charges, status_dashboard, stockroom, tasks, tool_control, training, tutorials, users, user_chemicals, forgot_password, billing, consultation
 
-# Use our custom login page instead of Django's built-in one.
-admin.site.login = login_required(admin.site.login)
+logger = logging.getLogger(__name__)
+
+if apps.is_installed("django.contrib.admin"):
+	# Use our custom login page instead of Django's built-in one.
+	admin.site.login = login_required(admin.site.login)
 
 # REST API URLs
 router = routers.DefaultRouter()
@@ -225,28 +233,9 @@ urlpatterns = [
 
 if settings.ALLOW_CONDITIONAL_URLS:
 	urlpatterns += [
-		url(r'^admin/', include(admin.site.urls)),
+		url(r'^admin/', admin.site.urls),
 		url(r'^api/', include(router.urls)),
 		url(r'^api/billing/?$', api.billing),
-
-		# Tablet area access
-		url(r'^welcome_screen/(?P<door_id>\d+)/$', area_access.welcome_screen, name='welcome_screen'),
-		url(r'^farewell_screen/(?P<door_id>\d+)/$', area_access.farewell_screen, name='farewell_screen'),
-		url(r'^login_to_area/(?P<door_id>\d+)/$', area_access.login_to_area, name='login_to_area'),
-		url(r'^logout_of_area/(?P<door_id>\d+)/$', area_access.logout_of_area, name='logout_of_area'),
-		url(r'^open_door/(?P<door_id>\d+)/$', area_access.open_door, name='open_door'),
-
-		# Tablet kiosk
-		url(r'^kiosk/enable_tool/$', kiosk.enable_tool, name='enable_tool_from_kiosk'),
-		url(r'^kiosk/disable_tool/$', kiosk.disable_tool, name='disable_tool_from_kiosk'),
-		url(r'^kiosk/reserve_tool/$', kiosk.reserve_tool, name='reserve_tool_from_kiosk'),
-		url(r'^kiosk/cancel_reservation/(?P<reservation_id>\d+)/$', kiosk.cancel_reservation, name='cancel_reservation_from_kiosk'),
-		url(r'^kiosk/choices/$', kiosk.choices, name='kiosk_choices'),
-		url(r'^kiosk/category_choices/(?P<category>.+)/(?P<user_id>\d+)/$', kiosk.category_choices, name='kiosk_category_choices'),
-		url(r'^kiosk/tool_information/(?P<tool_id>\d+)/(?P<user_id>\d+)/(?P<back>back_to_start|back_to_category)/$', kiosk.tool_information, name='kiosk_tool_information'),
-		url(r'^kiosk/tool_reservation/(?P<tool_id>\d+)/(?P<user_id>\d+)/(?P<back>back_to_start|back_to_category)/$', kiosk.tool_reservation, name='kiosk_tool_reservation'),
-		url(r'^kiosk/(?P<location>.+)/$', kiosk.kiosk, name='kiosk'),
-		url(r'^kiosk/$', kiosk.kiosk, name='kiosk'),
 
 		# Area access
 		url(r'^area_access/$', area_access.area_access, name='area_access'),
@@ -257,7 +246,7 @@ if settings.ALLOW_CONDITIONAL_URLS:
 		url(r'^billingxls/$', billing.billingxls, name='billingxls'),
 
 		# General area occupancy table, for use with Kiosk and Area Access tablets
-		url(r'^occupancy/$', status_dashboard.occupancy, name='occupancy'),
+		#url(r'^occupancy/$', status_dashboard.occupancy, name='occupancy'),
 
 		# Reminders and periodic events
 		url(r'^email_reservation_reminders/$', calendar.email_reservation_reminders, name='email_reservation_reminders'),
@@ -302,18 +291,34 @@ if settings.ALLOW_CONDITIONAL_URLS:
 		# Project Usage:
 		url(r'^project_usage/$', usage.project_usage, name='project_usage'),
 		url(r'^project_billing/$', usage.project_billing, name='project_billing'),
+
+		# NanoFab billing:
+		url(r'^billing/$', usage.billing, name='billing'),
 	]
+
+# Include urls for all NEMO plugins (that start with prefix NEMO)
+for app in apps.get_app_configs():
+	app_name = app.name
+	if app_name != 'NEMO' and app_name.startswith('NEMO'):
+		try:
+			mod = import_module('%s.urls' % app_name)
+		except ModuleNotFoundError:
+			logger.warning(f"no urls found for NEMO plugin: {app_name}")
+			pass
+		except Exception as e:
+			logger.warning(f"could not import urls for NEMO plugin: {app_name} {str(e)}")
+			pass
+		else:
+			urlpatterns += [path('', include('%s.urls' % app_name))]
+			logger.debug(f"automatically including urls for plugin: {app_name}")
+
 
 if settings.DEBUG:
 	# Static files
 	url(r'^static/(?P<path>.*$)', serve, {'document_root': settings.STATIC_ROOT}, name='static'),
 	#url(r'^media/(?P<path>.*$)', serve, {'document_root': settings.MEDIA_ROOT}, name='media'),
-	try:
-		# Django debug toolbar
-		import debug_toolbar
-		urlpatterns = [
-			url(r'^__debug__/', include(debug_toolbar.urls)),
-		] + urlpatterns
-	except ImportError:
-		pass
+	if apps.is_installed('debug_toolbar'):
+		urlpatterns += [
+			url(r'^__debug__/', include('debug_toolbar.urls')),
+		]
 	urlpatterns += staticfiles_urlpatterns()

@@ -1,4 +1,5 @@
 from django.contrib.auth.decorators import login_required
+from django.db.models import Q
 from django.http import HttpResponse
 from django.shortcuts import render
 from django.utils import timezone
@@ -39,7 +40,8 @@ def create_tool_summary(request):
 	tools = Tool.objects.filter(visible=True)
 	tasks = Task.objects.filter(cancelled=False, resolved=False, tool__visible=True).prefetch_related('tool')
 	unavailable_resources = Resource.objects.filter(available=False).prefetch_related('fully_dependent_tools', 'partially_dependent_tools')
-	usage_events = UsageEvent.objects.filter(end=None, tool__visible=True).prefetch_related('operator', 'user', 'tool')
+	# also check for visibility on the parent if there is one (alternate tool are hidden)
+	usage_events = UsageEvent.objects.filter(Q(end=None, tool__visible=True)|Q(end=None, tool__parent_tool__visible=True)).prefetch_related('operator', 'user', 'tool')
 	scheduled_outages = ScheduledOutage.objects.filter(start__lte=timezone.now(), end__gt=timezone.now())
 	user = request.user
 	tool_summary = merge(tools, tasks, unavailable_resources, usage_events, scheduled_outages, user)
@@ -50,17 +52,18 @@ def create_tool_summary(request):
 
 def merge(tools, tasks, unavailable_resources, usage_events, scheduled_outages, user):
 	result = {}
-	tools_with_delayed_logoff_in_effect = [x.tool.id for x in UsageEvent.objects.filter(end__gt=timezone.now())]
+	tools_with_delayed_logoff_in_effect = [x.tool.tool_or_parent_id() for x in UsageEvent.objects.filter(end__gt=timezone.now())]
+	parent_ids = Tool.objects.filter(parent_tool__isnull=False).values_list('parent_tool_id', flat=True)
 	user_qualified_on_tool = [y.id for y in user.qualifications.all()]
 	for tool in tools:
-		result[tool.id] = {
-			'name': tool.name,
+		result[tool.tool_or_parent_id()] = {
+			'name': tool.name_or_child_in_use_name(parent_ids=parent_ids),
 			'id': tool.id,
 			'user': '',
 			'operator': '',
 			'in_use': False,
 			'in_use_since': '',
-			'delayed_logoff_in_progress': tool.id in tools_with_delayed_logoff_in_effect,
+			'delayed_logoff_in_progress': tool.tool_or_parent_id() in tools_with_delayed_logoff_in_effect,
 			'problematic': False,
 			'operational': tool.operational,
 			'required_resource_is_unavailable': False,
@@ -71,12 +74,12 @@ def merge(tools, tasks, unavailable_resources, usage_events, scheduled_outages, 
 	for task in tasks:
 		result[task.tool.id]['problematic'] = True
 	for event in usage_events:
-		result[event.tool.id]['operator'] = str(event.operator)
-		result[event.tool.id]['user'] = str(event.operator)
+		result[event.tool.tool_or_parent_id()]['operator'] = str(event.operator)
+		result[event.tool.tool_or_parent_id()]['user'] = str(event.operator)
 		if event.user != event.operator:
-			result[event.tool.id]['user'] += " on behalf of " + str(event.user)
-		result[event.tool.id]['in_use'] = True
-		result[event.tool.id]['in_use_since'] = event.start
+			result[event.tool.tool_or_parent_id()]['user'] += " on behalf of " + str(event.user)
+		result[event.tool.tool_or_parent_id()]['in_use'] = True
+		result[event.tool.tool_or_parent_id()]['in_use_since'] = event.start
 	for resource in unavailable_resources:
 		for tool in resource.fully_dependent_tools.filter(visible=True):
 			result[tool.id]['required_resource_is_unavailable'] = True

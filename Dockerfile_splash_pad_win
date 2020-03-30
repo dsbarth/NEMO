@@ -1,0 +1,30 @@
+ #FROM rkttu/python-nanoserver:3.7.4_1809
+FROM python:3.6.8-windowsservercore
+
+COPY . /install/nemo/
+
+RUN mkdir "c:/NEMO"
+RUN mkdir "c:/NEMO/media"
+WORKDIR "c:/NEMO"
+COPY resources/icons/* "c:/NEMO/media/"
+COPY resources/people/* "c:/NEMO/media/"
+COPY resources/sounds/* "c:/NEMO/media/"
+COPY resources/splash_pad_settings.py "c:/NEMO/"
+COPY NEMO/fixtures/splash_pad.json "c:/NEMO/"
+RUN pip install virtualenv
+RUN virtualenv venv
+RUN c:/nemo/venv/Scripts/activate
+RUN pip install /install/NEMO/
+
+RUN setx /M PATH $($Env:PATH + 'C:\\Python;C:\\Python\\Scripts;C:\\Python\\DLLs;C:\\Python\\Lib;C:\\Python\\Lib\\plat-win;C:\\Python\\Lib\\site-packages;C:\\nemo')
+RUN setx /M PYTHONPATH $('C:\\Python;C:\\Python\\Scripts;C:\\Python\\DLLs;C:\\Python\\Lib;C:\\Python\\Lib\\plat-win;C:\\Python\\Lib\\site-packages;C:\\nemo')
+RUN setx /M DJANGO_SETTINGS_MODULE $('splash_pad_settings')
+ENV DJANGO_SETTINGS_MODULE "splash_pad_settings"
+
+RUN django-admin makemigrations
+RUN django-admin migrate
+RUN django-admin loaddata splash_pad.json
+
+ENV REMOTE_USER "captain"
+EXPOSE 8000/tcp
+CMD python c:/python/lib/site-packages/NEMO/manage.py runserver 0.0.0.0:8000

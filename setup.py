@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
 	name='NEMO',
-	version='2.1.0',
+	version='2.1.1',
 	python_requires='>=3.6',
 	packages=find_packages(exclude=['NEMO.tests','NEMO.tests.*']),
 	include_package_data=True,
@@ -36,7 +36,6 @@ setup(
 		'numpy==1.15.3',
 		'pandas==0.23.4',
 		'XlsxWriter==1.1.2',
-		'django_cleanup==4.0.0',
 	],
 	entry_points={
 		'console_scripts': ['nemo=NEMO.provisioning:entry_point'],

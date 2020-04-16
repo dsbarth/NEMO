@@ -27,6 +27,11 @@ class Migration(migrations.Migration):
         ),
         migrations.AddField(
             model_name='interlockcard',
+            name='category',
+            field=models.ForeignKey(default=1, on_delete=django.db.models.deletion.CASCADE, to='NEMO.InterlockCardCategory'),
+        ),
+        migrations.AddField(
+            model_name='interlockcard',
             name='enabled',
             field=models.BooleanField(default=True),
         ),
@@ -74,10 +79,5 @@ class Migration(migrations.Migration):
             model_name='user',
             name='preferences',
             field=models.OneToOneField(null=True, on_delete=django.db.models.deletion.SET_NULL, to='NEMO.UserPreferences'),
-        ),
-        migrations.AddField(
-            model_name='interlockcard',
-            name='category',
-            field=models.ForeignKey(default=1, on_delete=django.db.models.deletion.CASCADE, to='NEMO.InterlockCardCategory'),
         ),
     ]

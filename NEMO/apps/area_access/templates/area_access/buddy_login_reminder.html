@@ -1,0 +1,9 @@
+<script>$('body').removeClass().addClass('logout-warning')</script>
+{% if previous_area %}
+	<h1>You've been automatically logged out of the {{ previous_area|lower }}, and you're now logged in to the {{ area|lower }}, {{ name }}. <br>There are only {{ occupants }} labmembers logged in to this area. Please be aware of the other labmembers so that you can serve as effective safety buddies for each other.</h1>
+{% else %}
+	<h1>You're logged in to the {{ area|lower }}, {{ name }}. <br>There are only {{ occupants }} labmembers logged in to this area. Please be aware of the other labmembers so that you can serve as effective safety buddies for each other.</h1>
+{% endif %}
+<h2>Access time is being registered to the project named {{ project }}.</h2>
+<script>revert(10);</script>
+<audio src="{% url 'media' 'warning.mp3' %}" autoplay></audio>

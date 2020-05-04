@@ -132,7 +132,13 @@ def login_to_area(request, door_id):
 		record.customer = user
 		record.project = project
 		record.save()
+		occupants = AreaAccessRecord.objects.filter(area__name=record.area, end=None, staff_charge=None).count()
 		unlock_door(door.id)
+		if door.area.buddy_required():
+			if occupants == 1:
+				return render(request, 'area_access/buddy_login_warning.html', {'area': door.area, 'name': user.first_name, 'project': record.project, 'previous_area': previous_area})
+			elif occupants <= 3:
+				return render(request, 'area_access/buddy_login_reminder.html', {'area': door.area, 'name': user.first_name, 'project': record.project, 'previous_area': previous_area, 'occupants': occupants})
 		return render(request, 'area_access/login_success.html', {'area': door.area, 'name': user.first_name, 'project': record.project, 'previous_area': previous_area})
 
 
@@ -158,8 +164,24 @@ def logout_of_area(request, door_id):
 	if record:
 		record.end = timezone.now()
 		record.save()
+		occupants = AreaAccessRecord.objects.filter(area__name=record.area, end=None, staff_charge=None).count()
 		busy_tools = UsageEvent.objects.filter(end=None, user=user)
-		if busy_tools:
+		if record.area.buddy_required():
+			if occupants == 2:
+				if busy_tools:
+					return render(request, 'area_access/buddy_logout_reminder.html', {'area': record.area, 'name': user.first_name, 'tools_in_use': busy_tools})
+				else:
+					return render(request, 'area_access/buddy_logout_reminder.html', {'area': record.area, 'name': user.first_name})
+			elif occupants == 1:
+				if busy_tools:
+					return render(request, 'area_access/buddy_logout_warning.html', {'area': record.area, 'name': user.first_name, 'tools_in_use': busy_tools})
+				else:
+					return render(request, 'area_access/buddy_logout_warning.html', {'area': record.area, 'name': user.first_name})
+			elif busy_tools:
+				return render(request, 'area_access/logout_warning.html', {'area': record.area, 'name': user.first_name, 'tools_in_use': busy_tools})
+			else:
+				return render(request, 'area_access/logout_success.html', {'area': record.area, 'name': user.first_name})
+		elif busy_tools:
 			return render(request, 'area_access/logout_warning.html', {'area': record.area, 'name': user.first_name, 'tools_in_use': busy_tools})
 		else:
 			return render(request, 'area_access/logout_success.html', {'area': record.area, 'name': user.first_name})

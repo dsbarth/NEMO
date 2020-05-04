@@ -793,6 +793,24 @@ class StaffCharge(CalendarDisplay):
 class Area(models.Model):
 	name = models.CharField(max_length=200, help_text='What is the name of this area? The name will be displayed on the tablet login and logout pages.')
 	welcome_message = models.TextField(help_text='The welcome message will be displayed on the tablet login page. You can use HTML and JavaScript.')
+	require_buddy = models.BooleanField(default=False, help_text='Indicates that the buddy system is required in this area.')
+	force_buddy = models.BooleanField(default=False, help_text='Toggle to force activation of buddy system outside of usual hours (i.e. for a holiday).')
+	buddy_start = models.PositiveIntegerField(default=20, help_text='Time in 24 hour format of start of buddy system, if active and not forced')
+	buddy_end = models.PositiveIntegerField(default=8, help_text='Time in 24 hour format of end of buddy system, if active and not forced')
+
+	def buddy_required(self):
+		now = timezone.localtime(timezone.now())
+		saturday = 6
+		sunday = 7
+		if not self.require_buddy:
+			return False
+		elif self.force_buddy:
+			return True
+		elif now.isoweekday() == saturday or now.isoweekday() == sunday:
+			return True
+		elif now.hour >= self.buddy_start or now.hour < self.buddy_end:
+			return True
+		return False
 
 	class Meta:
 		ordering = ['name']

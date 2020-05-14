@@ -15,7 +15,7 @@
 		<small> between {{ start_date|date:"F jS, Y" }} and {{ end_date|date:"F jS, Y" }}</small>
 	</h1>
 	<p>
-		This page presents a monthly report of your NanoFab usage and billing information. Approved adjustments are reflected in the Billing information data but not in the Usage data.
+		This page presents a monthly report of your {{ facility_name }} usage.
 	</p>
 	<div style="height: 20px"></div>
 	<form class="form-horizontal" role="form">
@@ -43,9 +43,12 @@
 			<div class="col-sm-2">
 				<input type="text" id="end_date" name="end_date" class="form-control select-date" placeholder="Choose a date">
 			</div>
+
+
 			{% if not project_autocomplete %}
-				<div class="col-sm-2">
-					<input type="submit" class="btn btn-success" value="Update">
+				<div class="form-group">
+					<input type="submit" class="btn btn-success" value="Update" onclick="javascript: form.action=' {% url 'usage' %}';">
+					<input type="submit" class="btn btn-default" value="Download usage xlsx" onclick="javascript: form.action=' {% url 'usage_xlsx' %}';">
 				</div>
 			{% endif %}
 		</div>
@@ -86,24 +89,68 @@
 				}
 			}
 			$(set_dropdown_selected());
+
+			function get_user(jquery_event, search_selection, dataset_name)
+			{
+				$('#customer').val(search_selection.id);
+			}
+			function on_load_user()
+			{
+				$("#usersearch").autocomplete('users', get_user, {{ users|json_search_base }}).focus();
+			}
+			$(on_load_user);
 		</script>
 
 		{% if project_autocomplete %}
+		<div><p><strong>Filter Parameters</strong></p></div>
+		<div class="form-group">
+			<div class="control-label col-sm-2" for="usersearch"><strong>User</strong></div>
+				<div class="col-sm-4" id="search_container" style="width: 36.4%;">
+					<input id="usersearch" class="form-control" type="text" {% if customer %}placeholder="{{ customer }}"{% else %}placeholder="Search for a user"{% endif %} class="form-control" autofocus>
+					<input id="customer" name="customer" type="hidden" {% if customer %}value="{{ customer.id }}"{% endif %}>
+				</div>
+		</div>
 			<div class="form-group">
-				<label class="control-label col-sm-2" for="search"><strong>For</strong></label>
+				<label class="control-label col-sm-2" for="search"><strong>Application</strong></label>
 				<div class="col-sm-4" id="search_container" style="width: 36.4%;">
 					<input id="search" type="text" class="form-control" style="width: 100%" autofocus {% if selection %}placeholder="{{ selection }}"{% else %}placeholder="Search for an account, application or project"{% endif %}>
 				</div>
-				<div class="col-sm-2">
-					<input type="submit" class="btn btn-success" value="Update">
+			</div>
+			<div class="form-group">
+				<div class="control-label col-sm-2" for="toolsearch"><strong>Tool</strong></div>
+					<div class="col-sm-4" id="search_container" style="width: 36.4%;">
+						<input id="toolsearch" class="form-control" type="text" {% if tool %}placeholder="{{ tool }}"{% else %}placeholder="Search for a tool"{% endif %} class="form-control">
+						<input id="tool" name="tool" type="hidden" {% if tool %}value="{{ tool.id }}"{% endif %}>
+					</div>
+
+				<div class="form-group">
+					<input type="submit" class="btn btn-success" value="Update" onclick="javascript: form.action=' {% url 'project_usage' %}';">
+					<input type="submit" class="btn btn-default" value="Download usage xlsx" onclick="javascript: form.action=' {% url 'usage_xlsx' %}';">
+					<button id="reset_filters" type="button" class="btn btn-default" title="Reset Filters" onclick="reset_filter_values();location.href='{% url 'project_usage' %}';">Reset Filters</button>
 				</div>
 			</div>
 			<script>
+				function reset_filter_values(jquery_event)
+				{
+					$('#tool').val('');
+					$('#customer').val('');
+					$('#type').val('');
+					$('#id').val('');
+				}
 				function get_account(jquery_event, search_selection)
 				{
 					$('#type').val(search_selection.type);
 					$('#id').val(search_selection.id);
 				}
+				function get_tool(jquery_event, search_selection, dataset_name)
+				{
+					$('#tool').val(search_selection.id);
+				}
+				function on_load_tool()
+				{
+					$("#toolsearch").autocomplete('tools', get_tool, {{ tools|json_search_base }}).focus();
+				}
+				$(on_load_tool);
 				function on_load()
 				{
 					$('#search').autocomplete('accounts_and_projects_for_usage', get_account, {% json_search_base_with_extra_fields accounts_and_applications %});
@@ -124,7 +171,7 @@
 	</form>
 
 	<div style="height: 5px; border-top: 1px dotted #eee"></div>
-	{% if not project_autocomplete or project_autocomplete and selection %}
+	{% if not project_autocomplete or project_autocomplete and selection or tool or customer %}
 		{% block usage_content %}{% endblock %}
 	{% endif %}
 {% endblock %}

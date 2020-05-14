@@ -1,0 +1,22 @@
+FROM python:3.6.8-windowsservercore
+
+COPY . /install/nemo/
+
+RUN mkdir "c:/NEMO"
+WORKDIR "c:/NEMO"
+RUN pip install virtualenv
+RUN virtualenv venv
+RUN c:/nemo/venv/Scripts/activate
+RUN pip install /install/NEMO/ waitress
+
+RUN Remove-Item -path c:/install/NEMO -recurse -force
+COPY start_NEMO_in_Docker.ps1 c:/install/nemo/
+
+RUN setx /M PATH $($Env:PATH + 'C:\\Python;C:\\Python\\Scripts;C:\\Python\\DLLs;C:\\Python\\Lib;C:\\Python\\Lib\\plat-win;C:\\Python\\Lib\\site-packages;C:\\nemo')
+RUN setx /M PYTHONPATH $('C:\\Python;C:\\Python\\Scripts;C:\\Python\\DLLs;C:\\Python\\Lib;C:\\Python\\Lib\\plat-win;C:\\Python\\Lib\\site-packages;C:\\nemo')
+RUN setx /M DJANGO_SETTINGS_MODULE $('splash_pad_settings')
+ENV DJANGO_SETTINGS_MODULE "settings"
+
+EXPOSE 8000/tcp
+
+CMD powershell.exe -executionpolicy bypass c:\install\nemo\start_NEMO_in_Docker.ps1

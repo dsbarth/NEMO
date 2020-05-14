@@ -1,5 +1,18 @@
 {% extends 'usage/usage_base.html' %}
 {% block usage_content %}
+<style>
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+th, td {
+  text-align: left;
+  padding: 8px;
+}
+
+tr:nth-child(even) {background-color: #f2f2f2;}
+</style>
 	<div style="margin-top:10px">
 		<ul class="nav nav-pills" id="tabs">
 			<li class="active"><a>Usage</a></li>
@@ -16,37 +29,153 @@
 			{% if no_charges %}
 				<h3>There was no usage between {{ start_date|date:"F jS, Y" }} and {{ end_date|date:"F jS, Y" }}.</h3>
 			{% endif %}
+			{% if area_access %}
+				<h3>Area access</h3>
+				<table class="table">
+					<thead>
+						<tr>
+							<th>User</th>
+							<th>Area</th>
+							<th>Start</th>
+							<th>End</th>
+							<th>Project</th>
+						</tr>
+					</thead>
+					<tbody>
+						{% for a in area_access %}
+							<tr>
+								<td>{{ a.customer }}</td>
+								<td>{{ a.area }}</td>
+								<td>{{ a.start|date:"Y-m-d @H:i" }}</td>
+								<td>{{ a.end|date:"Y-m-d @H:i"|default_if_none:"In progress" }}</td>
+								<td>{{ a.project }}</td>
+							</tr>
+						{% endfor %}
+					</tbody>
+				</table>
+			{% endif %}
+			{% if usage_events %}
+				<h3>Tool usage</h3>
+				<table class="table">
+					<thead>
+						<tr>
+							<th>User</th>
+							<th>Tool</th>
+							<th>Start</th>
+							<th>End</th>
+							<th>Project</th>
+						</tr>
+					</thead>
+					<tbody>
+						{% for u in usage_events %}
+							<tr>
+								<td>{{ u.user }} {% if u.user != u.operator %}<span style="font-weight:bold">Operated by {{ u.operator }}</span>{% endif %}</td>
+								<td>{{ u.tool }}</td>
+								<td>{{ u.start|date:"Y-m-d @H:i" }}</td>
+								<td>{{ u.end|date:"Y-m-d @H:i"|default_if_none:"In progress" }}</td>
+								<td>{{ u.project }}</td>
+							</tr>
+						{% endfor %}
+					</tbody>
+				</table>
+			{% endif %}
 			{% if missed_reservations %}
 				<h3>Missed reservations</h3>
-				{% for m in missed_reservations %}
-					<div class="alert alert-danger">
-						<span style="font-weight:bold">{{ m.tool }}</span><br>
-						{{ m.start }}<br>
-						Charged to project {{ m.project }}
-					</div>
-				{% endfor %}
+				<table class="table">
+					<thead>
+						<tr>
+							<th>User</th>
+							<th>Tool</th>
+							<th>Start</th>
+							<th>Project</th>
+						</tr>
+					</thead>
+					<tbody>
+						{% for m in missed_reservations %}
+							<tr>
+								<td>{{ m.user }}</td>
+								<td>{{ m.tool }}</td>
+								<td>{{ m.start|date:"Y-m-d @H:i" }}</td>
+								<td>{{ m.project }}</td>
+							</tr>
+						{% endfor %}
+					</tbody>
+				</table>
 			{% endif %}
 			{% if consumables %}
 				<h3>Supplies and consumables</h3>
-				{% for c in consumables %}
-					<div class="alert alert-info">
-						<span style="font-weight:bold">{{ c.consumable }}</span><br>
-						Quantity {{ c.quantity }}<br>
-						Purchased from {{ c.merchant }} on {{ c.date }}<br>
-						Charged to project {{ c.project }}
-					</div>
-				{% endfor %}
+				<table class="table">
+					<thead>
+						<tr>
+							<th>Customer</th>
+							<th>Item</th>
+							<th>Quantity</th>
+							<th>Date</th>
+							<th>Merchant</th>
+						</tr>
+					</thead>
+					<tbody>
+					{% for c in consumables %}
+						<tr>
+							<td>{{ c.customer }}</td>
+							<td>{{ c.consumable }}</td>
+							<td>{{ c.quantity }}</td>
+							<td>{{ c.date|date:"Y-m-d" }}</td>
+							<td>{{ c.merchant }}</td>
+						</tr>
+					{% endfor %}
+				</table>
+			{% endif %}
+			{% if stockroom_purchases %}
+				<h3>Stockroom Purchases</h3>
+				<table class="table">
+					<thead>
+						<tr>
+							<th>Customer</th>
+							<th>Item</th>
+							<th>Quantity</th>
+							<th>Unit Cost</th>
+							<th>Date</th>
+							<th>Merchant</th>
+						</tr>
+					</thead>
+					<tbody>
+					{% for c in stockroom_purchases %}
+						<tr>
+							<td>{{ c.customer }}</td>
+							<td>{{ c.stock }}</td>
+							<td>{{ c.quantity }}</td>
+							<td>{{ c.stock.cost }}</td>
+							<td>{{ c.date|date:"Y-m-d" }}</td>
+							<td>{{ c.merchant }}</td>
+						</tr>
+					{% endfor %}
+				</table>
 			{% endif %}
 			{% if staff_charges %}
 				<h3>Staff charges</h3>
-				{% for s in staff_charges %}
-					<div class="alert alert-info">
-						<span style="font-weight:bold">Work performed by {{ s.staff_member }}</span><br>
-						{{ s.start }}<br>
-						{{ s.end }}<br>
-						Charged to project {{ s.project }}
-					</div>
-				{% endfor %}
+				<table class="table">
+					<thead>
+						<tr>
+							<th>Staff Member</th>
+							<th>Customer</th>
+							<th>Start</th>
+							<th>End</th>
+							<th>Project</th>
+						</tr>
+					</thead>
+					<tbody>
+						{% for s in staff_charges %}
+							<tr>
+								<td>{{ s.staff_member }}</td>
+								<td>{{ s.customer }}</td>
+								<td>{{ s.start }}</td>
+								<td>{{ s.end }}</td>
+								<td>{{ s.project }}</td>
+							</tr>
+						{% endfor %}
+					</tbody>
+				</table>
 			{% endif %}
 			{% if training_sessions %}
 				<h3>Training sessions</h3>
@@ -54,29 +183,6 @@
 					<div class="alert alert-info">
 						{{ t.get_type_display }} training for {{ t.duration }} minutes taught by <span style="font-weight:bold">{{ t.trainer }}</span>
 						for the <span style="font-weight:bold">{{ t.tool }}</span>. Charged to project {{ t.project }} on {{ t.date }}.
-					</div>
-				{% endfor %}
-			{% endif %}
-			{% if area_access %}
-				<h3>Area access</h3>
-				{% for a in area_access %}
-					<div class="alert alert-info">
-						<span style="font-weight:bold">{{ a.area }}</span><br>
-						{{ a.start }}<br>
-						{{ a.end|default_if_none:"In progress" }}<br>
-						Charged to project {{ a.project }}
-					</div>
-				{% endfor %}
-			{% endif %}
-			{% if usage_events %}
-				<h3>Tool usage</h3>
-				{% for u in usage_events %}
-					<div class="alert {% if u.user == u.operator %}alert-info{% else %}alert-warning{% endif %}">
-						<span style="font-weight:bold">{{ u.tool }}</span><br>
-						{% if u.user != u.operator %}<span style="font-weight:bold">Operated by {{ u.operator }} on your behalf</span><br>{% endif %}
-						{{ u.start }}<br>
-						{{ u.end }}<br>
-						Charged to project {{ u.project }}
 					</div>
 				{% endfor %}
 			{% endif %}

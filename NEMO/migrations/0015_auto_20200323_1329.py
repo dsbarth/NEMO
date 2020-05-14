@@ -24,6 +24,196 @@ class Migration(migrations.Migration):
                 'ordering': ['name'],
             },
         ),
+        migrations.AddField(
+            model_name='alert',
+            name='category',
+            field=models.CharField(blank=True, help_text='A category/type for this alert.', max_length=200),
+        ),
+        migrations.AddField(
+            model_name='alert',
+            name='deleted',
+            field=models.BooleanField(default=False, help_text="Indicates the alert has been deleted and won't be shown anymore"),
+        ),
+        migrations.AddField(
+            model_name='alert',
+            name='expired',
+            field=models.BooleanField(default=False, help_text="Indicates the alert has expired and won't be shown anymore"),
+        ),
+        migrations.AddField(
+            model_name='interlockcard',
+            name='name',
+            field=models.CharField(blank=True, max_length=100, null=True),
+        ),
+        migrations.AddField(
+            model_name='physicalaccesslevel',
+            name='allow_staff_access',
+            field=models.BooleanField(default=False, help_text='Check this box to allow access to Staff users without explicitly granting them access'),
+        ),
+        migrations.AddField(
+            model_name='tool',
+            name='_description',
+            field=models.TextField(blank=True, db_column='description', help_text='HTML syntax could be used', null=True),
+        ),
+        migrations.AddField(
+            model_name='tool',
+            name='_image',
+            field=models.ImageField(blank=True, db_column='image', help_text='An image that represent the tool. Maximum width and height are 500px', upload_to=NEMO.utilities.get_tool_image_filename),
+        ),
+        migrations.AddField(
+            model_name='tool',
+            name='_serial',
+            field=models.CharField(blank=True, db_column='serial', help_text='Serial Number', max_length=100, null=True),
+        ),
+        migrations.AddField(
+            model_name='tool',
+            name='parent_tool',
+            field=models.ForeignKey(blank=True, help_text='Select a parent tool to allow alternate usage', null=True, on_delete=django.db.models.deletion.CASCADE, related_name='tool_children_set', to='NEMO.Tool'),
+        ),
+        migrations.AlterField(
+            model_name='interlock',
+            name='state',
+            field=models.IntegerField(choices=[(-1, 'Unknown'), (1, 'Unlocked'), (2, 'Locked')], default=-1),
+        ),
+        migrations.AlterField(
+            model_name='tool',
+            name='allow_delayed_logoff',
+            field=models.BooleanField(db_column='allow_delayed_logoff', default=False, help_text='Upon logging off users may enter a delay before another user may use the tool. Some tools require "spin-down" or cleaning time after use.'),
+        ),
+        migrations.AlterField(
+            model_name='tool',
+            name='category',
+            field=models.CharField(null=True, blank=True, db_column='category', help_text='Create sub-categories using slashes. For example "Category 1/Sub-category 1".', max_length=1000),
+        ),
+        migrations.AlterField(
+            model_name='tool',
+            name='backup_owners',
+            field=models.ManyToManyField(blank=True, db_table='NEMO_tool_backup_owners',
+                                         help_text='Alternate staff members who are responsible for administration of this tool when the primary owner is unavailable.',
+                                         related_name='backup_for_tools', to=settings.AUTH_USER_MODEL),
+        ),
+        migrations.AlterField(
+            model_name='tool',
+            name='location',
+            field=models.CharField(blank=True, db_column='location', max_length=100, null=True),
+        ),
+        migrations.AlterField(
+            model_name='tool',
+            name='phone_number',
+            field=models.CharField(blank=True, db_column='phone_number', max_length=100, null=True),
+        ),
+        migrations.AlterField(
+            model_name='tool',
+            name='post_usage_questions',
+            field=models.TextField(blank=True, db_column='post_usage_questions', help_text='Upon logging off a tool, questions can be asked such as how much consumables were used by the user. This field will only accept JSON format', null=True),
+        ),
+        migrations.AlterField(
+            model_name='tool',
+            name='primary_owner',
+            field=models.ForeignKey(blank=True, db_column='primary_owner_id',
+                                    help_text='The staff member who is responsible for administration of this tool.',
+                                    null=True, on_delete=django.db.models.deletion.PROTECT,
+                                    related_name='primary_tool_owner', to=settings.AUTH_USER_MODEL),
+        ),
+        migrations.AlterField(
+            model_name='tool',
+            name='grant_badge_reader_access_upon_qualification',
+            field=models.CharField(blank=True, db_column='grant_badge_reader_access_upon_qualification', help_text='Badge reader access is granted to the user upon qualification for this tool.', max_length=100, null=True),
+        ),
+        migrations.AlterField(
+            model_name='tool',
+            name='grant_physical_access_level_upon_qualification',
+            field=models.ForeignKey(blank=True, db_column='grant_physical_access_level_upon_qualification_id', help_text='The designated physical access level is granted to the user upon qualification for this tool.', null=True, on_delete=django.db.models.deletion.PROTECT, to='NEMO.PhysicalAccessLevel'),
+        ),
+        migrations.AlterField(
+            model_name='tool',
+            name='interlock',
+            field=models.OneToOneField(blank=True, db_column='interlock_id', null=True, on_delete=django.db.models.deletion.SET_NULL, to='NEMO.Interlock'),
+        ),
+        migrations.AlterField(
+            model_name='tool',
+            name='maximum_future_reservation_time',
+            field=models.PositiveIntegerField(blank=True, db_column='maximum_future_reservation_time', help_text='The maximum amount of time (in minutes) that a user may reserve from the current time onwards.', null=True),
+        ),
+        migrations.AlterField(
+            model_name='tool',
+            name='maximum_reservations_per_day',
+            field=models.PositiveIntegerField(blank=True, db_column='maximum_reservations_per_day', help_text='The maximum number of reservations a user may make per day for this tool.', null=True),
+        ),
+        migrations.AlterField(
+            model_name='tool',
+            name='maximum_usage_block_time',
+            field=models.PositiveIntegerField(blank=True, db_column='maximum_usage_block_time', help_text='The maximum amount of time (in minutes) that a user may reserve this tool for a single reservation. Leave this field blank to indicate that no maximum usage block time exists for this tool.', null=True),
+        ),
+        migrations.AlterField(
+            model_name='tool',
+            name='minimum_time_between_reservations',
+            field=models.PositiveIntegerField(blank=True, db_column='minimum_time_between_reservations', help_text='The minimum amount of time (in minutes) that the same user must have between any two reservations for this tool.', null=True),
+        ),
+        migrations.AlterField(
+            model_name='tool',
+            name='minimum_usage_block_time',
+            field=models.PositiveIntegerField(blank=True, db_column='minimum_usage_block_time', help_text='The minimum amount of time (in minutes) that a user must reserve this tool for a single reservation. Leave this field blank to indicate that no minimum usage block time exists for this tool.', null=True),
+        ),
+        migrations.AlterField(
+            model_name='tool',
+            name='missed_reservation_threshold',
+            field=models.PositiveIntegerField(blank=True, db_column='missed_reservation_threshold', help_text='The amount of time (in minutes) that a tool reservation may go unused before it is automatically marked as "missed" and hidden from the calendar. Usage can be from any user, regardless of who the reservation was originally created for. The cancellation process is triggered by a timed job on the web server.', null=True),
+        ),
+        migrations.AlterField(
+            model_name='tool',
+            name='notification_email_address',
+            field=models.EmailField(blank=True, db_column='notification_email_address', help_text='Messages that relate to this tool (such as comments, problems, and shutdowns) will be forwarded to this email address. This can be a normal email address or a mailing list address.', max_length=254, null=True),
+        ),
+        migrations.AlterField(
+            model_name='tool',
+            name='operational',
+            field=models.BooleanField(db_column='operational', default=False, help_text='Marking the tool non-operational will prevent users from using the tool.'),
+        ),
+        migrations.AlterField(
+            model_name='tool',
+            name='policy_off_between_times',
+            field=models.BooleanField(db_column='policy_off_between_times', default=False, help_text='Check this box to disable policy rules every day between the given times'),
+        ),
+        migrations.AlterField(
+            model_name='tool',
+            name='policy_off_end_time',
+            field=models.TimeField(blank=True, db_column='policy_off_end_time', help_text='The end time when policy rules should NOT be enforced', null=True),
+        ),
+        migrations.AlterField(
+            model_name='tool',
+            name='policy_off_start_time',
+            field=models.TimeField(blank=True, db_column='policy_off_start_time', help_text='The start time when policy rules should NOT be enforced', null=True),
+        ),
+        migrations.AlterField(
+            model_name='tool',
+            name='policy_off_weekend',
+            field=models.BooleanField(db_column='policy_off_weekend', default=False, help_text='Whether or not policy rules should be enforced on weekends'),
+        ),
+        migrations.AlterField(
+            model_name='tool',
+            name='requires_area_access',
+            field=models.ForeignKey(blank=True, db_column='requires_area_access_id', help_text='Indicates that this tool is physically located in a billable area and requires an active area access record in order to be operated.', null=True, on_delete=django.db.models.deletion.PROTECT, to='NEMO.Area'),
+        ),
+        migrations.AlterField(
+            model_name='tool',
+            name='reservation_horizon',
+            field=models.PositiveIntegerField(blank=True, db_column='reservation_horizon', default=14, help_text='Users may create reservations this many days in advance. Leave this field blank to indicate that no reservation horizon exists for this tool.', null=True),
+        ),
+        migrations.AlterField(
+            model_name='tool',
+            name='reservation_required',
+            field=models.BooleanField(db_column='reservation_required', default=False, help_text='Require that users have a current (within 15 minutes) reservation in order to use the tool'),
+        ),
+        migrations.RenameField(
+            model_name='tool',
+            old_name='category',
+            new_name='_category',
+        ),
+        migrations.RenameField(
+            model_name='tool',
+            old_name='backup_owners',
+            new_name='_backup_owners',
+        ),
         migrations.RenameField(
             model_name='tool',
             old_name='allow_delayed_logoff',
@@ -43,6 +233,11 @@ class Migration(migrations.Migration):
             model_name='tool',
             old_name='interlock',
             new_name='_interlock',
+        ),
+        migrations.RenameField(
+            model_name='tool',
+            old_name='location',
+            new_name='_location',
         ),
         migrations.RenameField(
             model_name='tool',
@@ -86,6 +281,11 @@ class Migration(migrations.Migration):
         ),
         migrations.RenameField(
             model_name='tool',
+            old_name='phone_number',
+            new_name='_phone_number',
+        ),
+        migrations.RenameField(
+            model_name='tool',
             old_name='policy_off_between_times',
             new_name='_policy_off_between_times',
         ),
@@ -106,6 +306,16 @@ class Migration(migrations.Migration):
         ),
         migrations.RenameField(
             model_name='tool',
+            old_name='post_usage_questions',
+            new_name='_post_usage_questions',
+        ),
+        migrations.RenameField(
+            model_name='tool',
+            old_name='primary_owner',
+            new_name='_primary_owner',
+        ),
+        migrations.RenameField(
+            model_name='tool',
             old_name='requires_area_access',
             new_name='_requires_area_access',
         ),
@@ -118,199 +328,5 @@ class Migration(migrations.Migration):
             model_name='tool',
             old_name='reservation_required',
             new_name='_reservation_required',
-        ),
-        migrations.RemoveField(
-            model_name='tool',
-            name='backup_owners',
-        ),
-        migrations.RemoveField(
-            model_name='tool',
-            name='category',
-        ),
-        migrations.RemoveField(
-            model_name='tool',
-            name='location',
-        ),
-        migrations.RemoveField(
-            model_name='tool',
-            name='phone_number',
-        ),
-        migrations.RemoveField(
-            model_name='tool',
-            name='post_usage_questions',
-        ),
-        migrations.RemoveField(
-            model_name='tool',
-            name='primary_owner',
-        ),
-        migrations.AddField(
-            model_name='alert',
-            name='category',
-            field=models.CharField(blank=True, help_text='A category/type for this alert.', max_length=200),
-        ),
-        migrations.AddField(
-            model_name='alert',
-            name='deleted',
-            field=models.BooleanField(default=False, help_text="Indicates the alert has been deleted and won't be shown anymore"),
-        ),
-        migrations.AddField(
-            model_name='alert',
-            name='expired',
-            field=models.BooleanField(default=False, help_text="Indicates the alert has expired and won't be shown anymore"),
-        ),
-        migrations.AddField(
-            model_name='interlockcard',
-            name='name',
-            field=models.CharField(blank=True, max_length=100, null=True),
-        ),
-        migrations.AddField(
-            model_name='physicalaccesslevel',
-            name='allow_staff_access',
-            field=models.BooleanField(default=False, help_text='Check this box to allow access to Staff users without explicitly granting them access'),
-        ),
-        migrations.AddField(
-            model_name='tool',
-            name='_backup_owners',
-            field=models.ManyToManyField(blank=True, db_table='NEMO_tool_backup_owners', help_text='Alternate staff members who are responsible for administration of this tool when the primary owner is unavailable.', related_name='backup_for_tools', to=settings.AUTH_USER_MODEL),
-        ),
-        migrations.AddField(
-            model_name='tool',
-            name='_category',
-            field=models.CharField(blank=True, db_column='category', help_text='Create sub-categories using slashes. For example "Category 1/Sub-category 1".', max_length=1000, null=True),
-        ),
-        migrations.AddField(
-            model_name='tool',
-            name='_description',
-            field=models.TextField(blank=True, db_column='description', help_text='HTML syntax could be used', null=True),
-        ),
-        migrations.AddField(
-            model_name='tool',
-            name='_image',
-            field=models.ImageField(blank=True, db_column='image', help_text='An image that represent the tool. Maximum width and height are 500px', upload_to=NEMO.utilities.get_tool_image_filename),
-        ),
-        migrations.AddField(
-            model_name='tool',
-            name='_location',
-            field=models.CharField(blank=True, db_column='location', max_length=100, null=True),
-        ),
-        migrations.AddField(
-            model_name='tool',
-            name='_phone_number',
-            field=models.CharField(blank=True, db_column='phone_number', max_length=100, null=True),
-        ),
-        migrations.AddField(
-            model_name='tool',
-            name='_post_usage_questions',
-            field=models.TextField(blank=True, db_column='post_usage_questions', help_text='Upon logging off a tool, questions can be asked such as how much consumables were used by the user. This field will only accept JSON format', null=True),
-        ),
-        migrations.AddField(
-            model_name='tool',
-            name='_primary_owner',
-            field=models.ForeignKey(blank=True, db_column='primary_owner_id', help_text='The staff member who is responsible for administration of this tool.', null=True, on_delete=django.db.models.deletion.PROTECT, related_name='primary_tool_owner', to=settings.AUTH_USER_MODEL),
-        ),
-        migrations.AddField(
-            model_name='tool',
-            name='_serial',
-            field=models.CharField(blank=True, db_column='serial', help_text='Serial Number', max_length=100, null=True),
-        ),
-        migrations.AddField(
-            model_name='tool',
-            name='parent_tool',
-            field=models.ForeignKey(blank=True, help_text='Select a parent tool to allow alternate usage', null=True, on_delete=django.db.models.deletion.CASCADE, related_name='tool_children_set', to='NEMO.Tool'),
-        ),
-        migrations.AlterField(
-            model_name='interlock',
-            name='state',
-            field=models.IntegerField(choices=[(-1, 'Unknown'), (1, 'Unlocked'), (2, 'Locked')], default=-1),
-        ),
-        migrations.AlterField(
-            model_name='tool',
-            name='_allow_delayed_logoff',
-            field=models.BooleanField(db_column='allow_delayed_logoff', default=False, help_text='Upon logging off users may enter a delay before another user may use the tool. Some tools require "spin-down" or cleaning time after use.'),
-        ),
-        migrations.AlterField(
-            model_name='tool',
-            name='_grant_badge_reader_access_upon_qualification',
-            field=models.CharField(blank=True, db_column='grant_badge_reader_access_upon_qualification', help_text='Badge reader access is granted to the user upon qualification for this tool.', max_length=100, null=True),
-        ),
-        migrations.AlterField(
-            model_name='tool',
-            name='_grant_physical_access_level_upon_qualification',
-            field=models.ForeignKey(blank=True, db_column='grant_physical_access_level_upon_qualification_id', help_text='The designated physical access level is granted to the user upon qualification for this tool.', null=True, on_delete=django.db.models.deletion.PROTECT, to='NEMO.PhysicalAccessLevel'),
-        ),
-        migrations.AlterField(
-            model_name='tool',
-            name='_interlock',
-            field=models.OneToOneField(blank=True, db_column='interlock_id', null=True, on_delete=django.db.models.deletion.SET_NULL, to='NEMO.Interlock'),
-        ),
-        migrations.AlterField(
-            model_name='tool',
-            name='_maximum_future_reservation_time',
-            field=models.PositiveIntegerField(blank=True, db_column='maximum_future_reservation_time', help_text='The maximum amount of time (in minutes) that a user may reserve from the current time onwards.', null=True),
-        ),
-        migrations.AlterField(
-            model_name='tool',
-            name='_maximum_reservations_per_day',
-            field=models.PositiveIntegerField(blank=True, db_column='maximum_reservations_per_day', help_text='The maximum number of reservations a user may make per day for this tool.', null=True),
-        ),
-        migrations.AlterField(
-            model_name='tool',
-            name='_maximum_usage_block_time',
-            field=models.PositiveIntegerField(blank=True, db_column='maximum_usage_block_time', help_text='The maximum amount of time (in minutes) that a user may reserve this tool for a single reservation. Leave this field blank to indicate that no maximum usage block time exists for this tool.', null=True),
-        ),
-        migrations.AlterField(
-            model_name='tool',
-            name='_minimum_time_between_reservations',
-            field=models.PositiveIntegerField(blank=True, db_column='minimum_time_between_reservations', help_text='The minimum amount of time (in minutes) that the same user must have between any two reservations for this tool.', null=True),
-        ),
-        migrations.AlterField(
-            model_name='tool',
-            name='_minimum_usage_block_time',
-            field=models.PositiveIntegerField(blank=True, db_column='minimum_usage_block_time', help_text='The minimum amount of time (in minutes) that a user must reserve this tool for a single reservation. Leave this field blank to indicate that no minimum usage block time exists for this tool.', null=True),
-        ),
-        migrations.AlterField(
-            model_name='tool',
-            name='_missed_reservation_threshold',
-            field=models.PositiveIntegerField(blank=True, db_column='missed_reservation_threshold', help_text='The amount of time (in minutes) that a tool reservation may go unused before it is automatically marked as "missed" and hidden from the calendar. Usage can be from any user, regardless of who the reservation was originally created for. The cancellation process is triggered by a timed job on the web server.', null=True),
-        ),
-        migrations.AlterField(
-            model_name='tool',
-            name='_notification_email_address',
-            field=models.EmailField(blank=True, db_column='notification_email_address', help_text='Messages that relate to this tool (such as comments, problems, and shutdowns) will be forwarded to this email address. This can be a normal email address or a mailing list address.', max_length=254, null=True),
-        ),
-        migrations.AlterField(
-            model_name='tool',
-            name='_operational',
-            field=models.BooleanField(db_column='operational', default=False, help_text='Marking the tool non-operational will prevent users from using the tool.'),
-        ),
-        migrations.AlterField(
-            model_name='tool',
-            name='_policy_off_between_times',
-            field=models.BooleanField(db_column='policy_off_between_times', default=False, help_text='Check this box to disable policy rules every day between the given times'),
-        ),
-        migrations.AlterField(
-            model_name='tool',
-            name='_policy_off_end_time',
-            field=models.TimeField(blank=True, db_column='policy_off_end_time', help_text='The end time when policy rules should NOT be enforced', null=True),
-        ),
-        migrations.AlterField(
-            model_name='tool',
-            name='_policy_off_start_time',
-            field=models.TimeField(blank=True, db_column='policy_off_start_time', help_text='The start time when policy rules should NOT be enforced', null=True),
-        ),
-        migrations.AlterField(
-            model_name='tool',
-            name='_policy_off_weekend',
-            field=models.BooleanField(db_column='policy_off_weekend', default=False, help_text='Whether or not policy rules should be enforced on weekends'),
-        ),
-        migrations.AlterField(
-            model_name='tool',
-            name='_requires_area_access',
-            field=models.ForeignKey(blank=True, db_column='requires_area_access_id', help_text='Indicates that this tool is physically located in a billable area and requires an active area access record in order to be operated.', null=True, on_delete=django.db.models.deletion.PROTECT, to='NEMO.Area'),
-        ),
-        migrations.AlterField(
-            model_name='tool',
-            name='_reservation_horizon',
-            field=models.PositiveIntegerField(blank=True, db_column='reservation_horizon', default=14, help_text='Users may create reservations this many days in advance. Leave this field blank to indicate that no reservation horizon exists for this tool.', null=True),
         ),
     ]

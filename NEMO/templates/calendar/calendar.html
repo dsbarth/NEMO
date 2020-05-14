@@ -18,6 +18,7 @@
 			<li class="dropdown-header">Which type of events would you like<br>to view on the calendar?</li>
 			<li data-toggle="tooltip" data-placement="right" title="Displays tool reservations. While viewing reservations, the 'Personal schedule' link shows your reservations for all tools. Select a tool to view everyone's reservations for that tool."><a href="javascript:void(0)" onclick="change_calendar_event_type(this)">Reservations</a></li>
 			<li data-toggle="tooltip" data-placement="right" title="Displays your {{ facility_name }} usage. This includes area access, tool usage, and missed reservations (which are all billable items)."><a href="javascript:void(0)" onclick="change_calendar_event_type(this)">Usage</a></li>
+			<li data-toggle="tooltip" data-placement="right" title="Displays all upcoming reservations on all tools to help enable scheduling to comply with the Buddy System."><a href="javascript:void(0)" onclick="change_calendar_event_type(this)">Buddy View</a></li>
 			{% if user.is_staff %}
 				<li data-toggle="tooltip" data-placement="right" title="Displays {{ facility_name }} reservations and usage for a specific user. This includes reservations, area access, tool usage, and missed reservations."><a href="javascript:void(0)" onclick="change_calendar_event_type(this)">Specific user</a></li>
 			{% endif %}
@@ -84,6 +85,11 @@ function update_event_sources()
 		}
 		else if(item)
 			tool_event_source.data.tool_id = item;
+	}
+
+	else if(event_type === 'buddy view')
+	{
+		tool_event_source.color = "#33ad33";
 	}
 
 	else if(event_type === 'specific user')
@@ -458,6 +464,18 @@ function change_calendar_event_type(calling_element)
 		expand_collapse.show();
 		tool_search.show();
 		tool_tree.show();
+		$(proxy_reservation_button).hide();
+		$(scheduled_outage_button).hide();
+		update_event_sources();
+	}
+	else if(event_type === "buddy view")
+	{
+		user_search.hide();
+		chosen_user_button.hide();
+		extra_links.hide();
+		expand_collapse.hide();
+		tool_search.hide();
+		tool_tree.hide();
 		$(proxy_reservation_button).hide();
 		$(scheduled_outage_button).hide();
 		update_event_sources();

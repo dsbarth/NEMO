@@ -205,6 +205,7 @@ urlpatterns = [
 	# NanoFab usage:
 	url(r'^usage/$', usage.usage, name='usage'),
 	url(r'^usage_billing/$', usage.billing, name='usage_billing'),
+	url(r'^usage_xlsx/$', usage.usagexlsx, name='usage_xlsx'),
 
 	# Alerts:
 	url(r'^alerts/$', alerts.alerts, name='alerts'),
@@ -289,7 +290,7 @@ if settings.ALLOW_CONDITIONAL_URLS:
 		url(r'^customize/(?P<element>.+)/$', customization.customize, name='customize'),
 
 		# Project Usage:
-		url(r'^project_usage/$', usage.project_usage, name='project_usage'),
+		url(r'^usage_reports/$', usage.project_usage, name='project_usage'),
 		url(r'^project_billing/$', usage.project_billing, name='project_billing'),
 
 		# NanoFab billing:

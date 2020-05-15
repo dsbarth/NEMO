@@ -261,23 +261,21 @@ def create_reservation(request):
 
 	# If the user only has one project then associate it with the reservation.
 	# Otherwise, present a dialog box for the user to choose which project to associate.
-	exclude=get_customization('exclude_from_usage')
-	projects_to_exclude=[]
-	if exclude:
-		projects_to_exclude = [int(s) for s in exclude.split() if s.isdigit()]
-	active_projects = user.active_projects().exclude(id__in=projects_to_exclude)
-	if len(active_projects) == 1:
-		new_reservation.project = active_projects[0]
-	else:
-		try:
-			new_reservation.project = Project.objects.get(id=request.POST['project_id'])
-		except:
+	if not user.is_staff:
+		exclude=get_customization('exclude_from_usage')
+		projects_to_exclude=[]
+		if exclude:
+			projects_to_exclude = [int(s) for s in exclude.split() if s.isdigit()]
+		active_projects = user.active_projects().exclude(id__in=projects_to_exclude)
+		if len(active_projects) == 1:
+			new_reservation.project = active_projects[0]
+		else:
+			try:
+				new_reservation.project = Project.objects.get(id=request.POST['project_id'])
+			except:
+				return render(request, 'calendar/project_choice.html', {'active_projects': active_projects})
+		if new_reservation.project not in new_reservation.user.active_projects().exclude(id__in=projects_to_exclude):
 			return render(request, 'calendar/project_choice.html', {'active_projects': active_projects})
-
-	# Make sure the user is actually enrolled on the project. We wouldn't want someone
-	# forging a request to reserve against a project they don't belong to.
-	if new_reservation.project not in new_reservation.user.active_projects():
-		return render(request, 'calendar/project_choice.html', {'active_projects': active_projects})
 
 	configured = (request.POST.get('configured') == "true")
 	# If a reservation is requested and the tool does not require configuration...
@@ -563,6 +561,23 @@ def set_reservation_title(request, reservation_id):
 
 
 @login_required
+@require_POST
+def change_reservation_project(request, reservation_id):
+	""" Change reservation project for a user. """
+	exclude=get_customization('exclude_from_usage')
+	projects_to_exclude=[]
+	if exclude:
+		projects_to_exclude = [int(s) for s in exclude.split() if s.isdigit()]
+	reservation = get_object_or_404(Reservation, id=reservation_id)
+	active_projects = reservation.user.active_projects().exclude(id__in=projects_to_exclude)
+	project = get_object_or_404(Project, id=request.POST['project_id'])
+	if (request.user.is_staff or request.user == reservation.user) and reservation.has_not_ended() and reservation.has_not_started() and  project in active_projects:
+		reservation.project = project
+		reservation.save()
+	return HttpResponse()
+
+
+@login_required
 @permission_required('NEMO.trigger_timed_services', raise_exception=True)
 @require_GET
 def email_reservation_reminders(request):
@@ -819,7 +834,13 @@ def reservation_details(request, reservation_id):
 	if reservation.cancelled:
 		error_message = 'This reservation was cancelled by {0} at {1}.'.format(reservation.cancelled_by, format_datetime(reservation.cancellation_time))
 		return HttpResponseNotFound(error_message)
-	return render(request, 'calendar/reservation_details.html', {'reservation': reservation})
+	exclude=get_customization('exclude_from_usage')
+	projects_to_exclude=[]
+	if exclude:
+		projects_to_exclude = [int(s) for s in exclude.split() if s.isdigit()]
+	active_projects = user.active_projects().exclude(id__in=projects_to_exclude)
+	reservation_project_can_be_changed = (request.user.is_staff or request.user == reservation.user) and reservation.has_not_ended and reservation.has_not_started and reservation.user.active_project_count() > 1
+	return render(request, 'calendar/reservation_details.html', {'reservation': reservation, 'reservation_project_can_be_changed': reservation_project_can_be_changed, 'active_projects': active_projects})
 
 
 @login_required

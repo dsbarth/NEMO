@@ -3,6 +3,7 @@ from typing import List
 
 from django.contrib.admin.views.decorators import staff_member_required
 from django.contrib.auth.decorators import login_required, permission_required
+from django.db.models import F
 from django.http import HttpResponse, HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -11,7 +12,8 @@ from django.utils.http import urlencode
 from django.views.decorators.http import require_GET, require_POST, require_http_methods
 
 from NEMO.exceptions import NoAccessiblePhysicalAccessUserError, UnavailableResourcesUserError, UserAccessError, \
-	InactiveUserError, NoActiveProjectsForUserError, NoPhysicalAccessUserError, PhysicalAccessExpiredUserError
+	InactiveUserError, NoActiveProjectsForUserError, NoPhysicalAccessUserError, PhysicalAccessExpiredUserError, \
+	MaximumCapacityReachedError
 from NEMO.models import Area, AreaAccessRecord, Project, User, PhysicalAccessLevel
 
 from NEMO.utilities import parse_start_and_end_date
@@ -22,18 +24,28 @@ from NEMO.views.policy import check_policy_to_enter_this_area, check_policy_to_e
 @staff_member_required(login_url=None)
 @require_GET
 def area_access(request):
-	""" Presents a page that displays audit records for all access-controlled areas. """
-	today = timezone.now().strftime('%m/%d/%Y')
-	yesterday = (timezone.now() - timedelta(days=1)).strftime('%m/%d/%Y')
+	""" Presents a page that displays audit records for all NanoFab areas. """
+	now = timezone.now().astimezone()
+	today = now.strftime('%m/%d/%Y')
+	yesterday = (now - timedelta(days=1)).strftime('%m/%d/%Y')
 	dictionary = {
 		'today': reverse('area_access') + '?' + urlencode({'start': today, 'end': today}),
 		'yesterday': reverse('area_access') + '?' + urlencode({'start': yesterday, 'end': yesterday}),
+		'areas': Area.objects.all(),
 	}
 	try:
 		start, end = parse_start_and_end_date(request.GET['start'], request.GET['end'])
+		area = request.GET.get('area')
 		dictionary['start'] = start
 		dictionary['end'] = end
-		dictionary['access_records'] = AreaAccessRecord.objects.filter(start__gte=start, start__lt=end, staff_charge=None)
+		area_access_records = AreaAccessRecord.objects.filter(start__gte=start, start__lt=end, staff_charge=None)
+		if area:
+			area_access_records = area_access_records.filter(area__name=area)
+			dictionary['area_name'] = area
+		area_access_records = area_access_records.order_by('area__name')
+		area_access_records.query.add_ordering(F('end').desc(nulls_first=True))
+		area_access_records.query.add_ordering(F('start').desc())
+		dictionary['access_records'] = area_access_records
 	except:
 		pass
 	return render(request, 'area_access/area_access.html', dictionary)
@@ -78,6 +90,9 @@ def new_area_access_record(request):
 			return render(request, 'area_access/new_area_access_record.html', dictionary)
 		except UnavailableResourcesUserError:
 			dictionary['error_message'] = 'The {} is inaccessible because a required resource is unavailable. You must make all required resources for this area available before creating a new area access record.'.format(area.name.lower())
+			return render(request, 'area_access/new_area_access_record.html', dictionary)
+		except MaximumCapacityReachedError:
+			dictionary['error_message'] = 'The {} is inaccessible because it has reached its maximum capacity. Wait for somebody to exit and try again.'.format(area.name.lower())
 			return render(request, 'area_access/new_area_access_record.html', dictionary)
 		if user.billing_to_project():
 			dictionary['error_message'] = '{} is already billing area access to another area. The user must log out of that area before entering another.'.format(user)
@@ -178,10 +193,15 @@ def self_log_in(request):
 		try:
 			a = Area.objects.get(id=request.POST['area'])
 			p = Project.objects.get(id=request.POST['project'])
+			check_policy_to_enter_this_area(a, request.user)
 			if a in dictionary['areas'] and p in dictionary['projects']:
 				AreaAccessRecord.objects.create(area=a, customer=request.user, project=p)
+		except MaximumCapacityReachedError:
+			dictionary['error_message'] = 'The {} is inaccessible because it has reached its maximum capacity. Wait for somebody to exit and try again.'.format(a.name.lower())
+			return render(request, 'area_access/self_login.html', dictionary)
 		except:
-			pass
+			dictionary['error_message'] = "error"
+			return render(request, 'area_access/self_login.html', dictionary)
 		return redirect(reverse('landing'))
 
 
@@ -228,14 +248,17 @@ def able_to_self_log_in_to_area(user):
 	accessible_areas = get_accessible_areas_for_user(user)
 
 	# Check if the user normally has access to an area at the current time
-	try:
-		for accessible_area in accessible_areas:
+	for accessible_area in accessible_areas:
+		try:
 			check_policy_to_enter_this_area(area=accessible_area.area, user=user)
 			# Users may not access an area if it's not accessible at this time or if a required resource is unavailable,
 			# so return true if there exists at least one area they are able to log in to.
 			return True
-	except (NoAccessiblePhysicalAccessUserError, UnavailableResourcesUserError):
-		pass
+		except (NoAccessiblePhysicalAccessUserError, UnavailableResourcesUserError):
+			pass
+		except MaximumCapacityReachedError:
+			# we don't want to deal with that error just yet. we'll let the user try to log in and get an error
+			return True
 
 	# No areas are accessible...
 	return False

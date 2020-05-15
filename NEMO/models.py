@@ -573,6 +573,9 @@ class Tool(models.Model):
 		from django.urls import reverse
 		return reverse('tool_control', args=[self.tool_or_parent_id()])
 
+	def ready_to_use(self):
+		return self.operational and not self.required_resource_is_unavailable and not self.delayed_logoff_in_progress and not self.scheduled_outage_in_progress
+
 	def name_display(self):
 		return f"{self.name} ({self.parent_tool.name})" if self.is_child_tool() else f"{self.name}"
 	name_display.admin_order_field = '_name'
@@ -594,12 +597,16 @@ class Tool(models.Model):
 
 	def comments(self):
 		unexpired = Q(expiration_date__isnull=True) | Q(expiration_date__gt=timezone.now())
-		return self.parent_tool.comment_set.filter(visible=True).filter(unexpired) if self.is_child_tool() else self.comment_set.filter(visible=True).filter(unexpired)
+		return self.parent_tool.comment_set.filter(visible=True, staff_only=False).filter(unexpired) if self.is_child_tool() else self.comment_set.filter(visible=True, staff_only=False).filter(unexpired)
 
-	def required_resource_is_unavailable(self):
+	def staff_only_comments(self):
+		unexpired = Q(expiration_date__isnull=True) | Q(expiration_date__gt=timezone.now())
+		return self.parent_tool.comment_set.filter(visible=True, staff_only=True).filter(unexpired) if self.is_child_tool() else self.comment_set.filter(visible=True, staff_only=True).filter(unexpired)
+
+	def required_resource_is_unavailable(self) -> bool:
 		return self.parent_tool.required_resource_set.filter(available=False).exists() if self.is_child_tool() else self.required_resource_set.filter(available=False).exists()
 
-	def nonrequired_resource_is_unavailable(self):
+	def nonrequired_resource_is_unavailable(self) -> bool:
 		return self.parent_tool.nonrequired_resource_set.filter(available=False).exists() if self.is_child_tool() else self.nonrequired_resource_set.filter(available=False).exists()
 
 	def all_resources_available(self):
@@ -633,6 +640,10 @@ class Tool(models.Model):
 		""" Returns a QuerySet of scheduled outages that are in progress for this tool. This includes tool outages, and resources outages (when the tool fully depends on the resource). """
 		return ScheduledOutage.objects.filter(Q(tool=self.tool_or_parent_id()) | Q(resource__fully_dependent_tools__in=[self.tool_or_parent_id()]), start__lte=timezone.now(), end__gt=timezone.now())
 
+	def scheduled_partial_outages(self):
+		""" Returns a QuerySet of scheduled outages that are in progress for this tool. This includes resources outages when the tool partially depends on the resource. """
+		return ScheduledOutage.objects.filter(resource__partially_dependent_tools__in=[self.tool_or_parent_id()], start__lte=timezone.now(), end__gt=timezone.now())
+
 	def scheduled_outage_in_progress(self):
 		""" Returns a true if a tool or resource outage is currently in effect for this tool. Otherwise, returns false. """
 		return ScheduledOutage.objects.filter(Q(tool=self.tool_or_parent_id()) | Q(resource__fully_dependent_tools__in=[self.tool_or_parent_id()]), start__lte=timezone.now(), end__gt=timezone.now()).exists()
@@ -644,7 +655,7 @@ class Tool(models.Model):
 	is_configurable.short_description = 'Configurable'
 
 	def get_configuration_information(self, user, start):
-		configurations = self.parent_tool.configuration_set.all().order_by('display_priority') if self.is_child_tool() else self.configuration_set.all().order_by('display_priority')
+		configurations = self.current_ordered_configurations()
 		notice_limit = 0
 		able_to_self_configure = True
 		for config in configurations:
@@ -662,13 +673,17 @@ class Tool(models.Model):
 			results['sufficient_notice'] = (start - timedelta(hours=notice_limit) >= timezone.now())
 		return results
 
-	def configuration_widget(self, user):
+	def configuration_widget(self, user, render_as_form=None):
 		config_input = {
-			'configurations': self.parent_tool.configuration_set.all().order_by('display_priority') if self.is_child_tool() else self.configuration_set.all().order_by('display_priority'),
-			'user': user
+			'configurations': self.current_ordered_configurations(),
+			'user': user,
+			'render_as_form': render_as_form,
 		}
 		configurations = ConfigurationEditor()
 		return configurations.render(None, config_input)
+
+	def current_ordered_configurations(self):
+		return self.parent_tool.configuration_set.all().order_by('display_priority') if self.is_child_tool() else self.configuration_set.all().order_by('display_priority')
 
 	def get_current_usage_event(self):
 		""" Gets the usage event for the current user of this tool. """
@@ -793,6 +808,7 @@ class StaffCharge(CalendarDisplay):
 class Area(models.Model):
 	name = models.CharField(max_length=200, help_text='What is the name of this area? The name will be displayed on the tablet login and logout pages.')
 	welcome_message = models.TextField(help_text='The welcome message will be displayed on the tablet login page. You can use HTML and JavaScript.')
+	maximum_capacity = models.PositiveIntegerField(help_text='The maximum number of people allowed in this area at any given time. Set to 0 for unlimited.', default=0)
 	require_buddy = models.BooleanField(default=False, help_text='Indicates that the buddy system is required in this area.')
 	force_buddy = models.BooleanField(default=False, help_text='Toggle to force activation of buddy system outside of usual hours (i.e. for a holiday).')
 	buddy_start = models.PositiveIntegerField(default=20, help_text='Time in 24 hour format of start of buddy system, if active and not forced')
@@ -817,6 +833,12 @@ class Area(models.Model):
 
 	def __str__(self):
 		return self.name
+
+	def warning_capacity(self):
+		return .75 * self.maximum_capacity
+
+	def danger_capacity(self):
+		return self.maximum_capacity
 
 
 class AreaAccessRecord(CalendarDisplay):
@@ -912,6 +934,9 @@ class Reservation(CalendarDisplay):
 
 	def has_not_ended(self):
 		return False if self.end < timezone.now() else True
+
+	def has_not_started(self):
+		return False if self.start <= timezone.now() else True
 
 	def save_and_notify(self):
 		self.save()
@@ -1256,6 +1281,7 @@ class Comment(models.Model):
 	hide_date = models.DateTimeField(blank=True, null=True, help_text="The date when this comment was hidden. If it is still visible or has expired then this date should be empty.")
 	hidden_by = models.ForeignKey(User, null=True, blank=True, related_name="hidden_comments", on_delete=models.SET_NULL)
 	content = models.TextField()
+	staff_only = models.BooleanField(default=False)
 
 	class Meta:
 		ordering = ['-creation_date']

@@ -15,7 +15,7 @@ from django.core.exceptions import ValidationError
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
-from NEMO.admin import InterlockCardAdminForm
+from NEMO.admin import InterlockCardAdminForm, InterlockAdminForm
 from NEMO.exceptions import InterlockError
 from NEMO.models import Interlock as Interlock_model, InterlockCardCategory
 from NEMO.utilities import format_datetime
@@ -35,6 +35,9 @@ class Interlock(ABC):
 	"""
 
 	def clean_interlock_card(self, interlock_card_form: InterlockCardAdminForm):
+		pass
+
+	def clean_interlock(self, interlock_form: InterlockAdminForm):
 		pass
 
 	def lock(self, interlock: Interlock_model) -> {True, False}:
@@ -122,6 +125,14 @@ class StanfordInterlock(Interlock):
 		if error:
 			raise ValidationError(error)
 
+	def clean_interlock(self, interlock_form: InterlockAdminForm):
+		channel = interlock_form.cleaned_data['channel']
+		error = {}
+		if not channel:
+			error['channel'] = _('This field is required.')
+		if error:
+			raise ValidationError(error)
+
 	def _send_command(self, interlock: Interlock_model, command_type: Interlock_model.State) -> Interlock_model.State:
 		# The string in this next function call identifies the format of the interlock message.
 		# '!' means use network byte order (big endian) for the contents of the message.
@@ -205,6 +216,70 @@ class StanfordInterlock(Interlock):
 			sock.close()
 
 
+class ProXrInterlock(Interlock):
+	"""
+	Support for ProXR relay controllers.
+	See https://ncd.io/proxr-quick-start-guide/ for more about ProXR.
+	"""
+	# proxr relay status
+	PXR_RELAY_OFF = 0
+	PXR_RELAY_ON = 1
+
+	def clean_interlock(self, interlock_form: InterlockAdminForm):
+		"""Validates NEMO interlock configuration."""
+		channel = interlock_form.cleaned_data['channel']
+		error = {}
+		if channel not in range(1, 9):
+			error['channel'] = _('Relay must be 1-8.')
+		if error:
+			raise ValidationError(error)
+
+	def _send_bytes(self, relay_socket, proxrcmd):
+		"""
+		Returns the response from the relay controller.
+		Argument relay_socket is a connected socket object.
+		Argument proxrcmd (the ProXR command) is an iterable of 8-bit integers.
+		"""
+		# make sure that all bytes get sent
+		bytes_sent = 0
+		while bytes_sent < len(proxrcmd):
+			bytes_sent += relay_socket.send(bytes(proxrcmd[bytes_sent:]))
+		# relay responses can include erroneous data
+		# only the last byte of the response is important
+		return relay_socket.recv(64)[-1]
+
+	def _get_state(self, relay_socket, interlock_channel):
+		"""
+		Returns current NEMO state of the relay.
+		Argument relay_socket is a connected socket object.
+		Argument interlock_channel is the NEMO interlock.channel.
+		"""
+		state = self._send_bytes(relay_socket, (254, 115 + interlock_channel, 1))
+		if state == self.PXR_RELAY_OFF:
+			return Interlock_model.State.LOCKED
+		elif state == self.PXR_RELAY_ON:
+			return Interlock_model.State.UNLOCKED
+		else:
+			return Interlock_model.State.UNKNOWN
+
+	def _send_command(self, interlock: Interlock_model, command_type: Interlock_model.State) -> Interlock_model.State:
+		"""Returns and sets NEMO locked/unlocked state."""
+		state = Interlock_model.State.UNKNOWN
+		try:
+			with socket.create_connection((interlock.card.server, interlock.card.port), 10) as relay_socket:
+				if command_type == Interlock_model.State.LOCKED:
+					# turn the interlock channel off
+					self._send_bytes(relay_socket, (254, 99 + interlock.channel, 1))
+					state = self._get_state(relay_socket, interlock.channel)
+				elif command_type == Interlock_model.State.UNLOCKED:
+					# turn the interlock channel on
+					self._send_bytes(relay_socket, (254, 107 + interlock.channel, 1))
+					state = self._get_state(relay_socket, interlock.channel)
+		except Exception as error:
+			raise InterlockError(interlock=interlock, msg="Communication error: " + str(error))
+		return state
+
+
 class WebRelayHttpInterlock(Interlock):
 	WEB_RELAY_OFF = 0
 	WEB_RELAY_ON = 1
@@ -218,7 +293,7 @@ class WebRelayHttpInterlock(Interlock):
 		if error:
 			raise ValidationError(error)
 
-	def _send_command(self, interlock: Interlock_model, command_type: Interlock_model.State) -> (Interlock_model.State, str):
+	def _send_command(self, interlock: Interlock_model, command_type: Interlock_model.State) -> Interlock_model.State:
 		state = Interlock_model.State.UNKNOWN
 		try:
 			if command_type == Interlock_model.State.LOCKED:
@@ -245,6 +320,8 @@ class WebRelayHttpInterlock(Interlock):
 			return Interlock_model.State.LOCKED
 		elif state == WebRelayHttpInterlock.WEB_RELAY_ON:
 			return Interlock_model.State.UNLOCKED
+		else:
+			raise Exception(f"Unexpected state received from interlock: {state}")
 
 
 class ModbusInterlock(Interlock):
@@ -307,4 +384,5 @@ interlocks: Dict[str, Interlock] = {
 	'stanford': StanfordInterlock(),
 	'web_relay_http': WebRelayHttpInterlock(),
 	'modbus': ModbusInterlock(),
+	'proxr': ProXrInterlock(),
 }

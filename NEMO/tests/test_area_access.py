@@ -1,11 +1,13 @@
+from datetime import datetime
+
 from django.contrib.auth.models import Permission
 from django.test import TestCase
 from django.urls import reverse
 
 from NEMO.models import InterlockCardCategory, InterlockCard, Interlock, Door, Area, PhysicalAccessLevel, \
 	Project, Account, AreaAccessRecord, User, Customization
-from NEMO.tests.test_utilities import login_as_staff, login_as_user, test_response_is_login_page, \
-	test_response_is_landing_page, login_as_user_with_permissions
+from NEMO.tests.test_utilities import login_as_staff, login_as_user, test_response_is_landing_page, \
+	login_as_user_with_permissions, test_response_is_failed_login
 
 
 class AreaAccessGetTestCase(TestCase):
@@ -24,7 +26,7 @@ class AreaAccessGetTestCase(TestCase):
 
 	def test_area_access_page_by_anonymous(self):
 		response = self.client.get(reverse('area_access'), {}, follow=True)
-		test_response_is_login_page(self, response)
+		test_response_is_failed_login(self, response)
 
 
 class KioskAreaAccess(TestCase):
@@ -41,7 +43,7 @@ class KioskAreaAccess(TestCase):
 
 	def test_welcome_screen_fails(self):
 		response = self.client.post(reverse('welcome_screen', kwargs={'door_id':door.id}), follow=True)
-		test_response_is_login_page(self, response)
+		test_response_is_failed_login(self, response)
 		login_as_user(self.client)
 		response = self.client.post(reverse('welcome_screen', kwargs={'door_id': door.id}), follow=True)
 		test_response_is_landing_page(self, response) # landing since we don't have the right credentials
@@ -57,7 +59,7 @@ class KioskAreaAccess(TestCase):
 
 	def test_farewell_screen_fails(self):
 		response = self.client.post(reverse('farewell_screen', kwargs={'door_id':door.id}), follow=True)
-		test_response_is_login_page(self, response)
+		test_response_is_failed_login(self, response)
 		login_as_user(self.client)
 		response = self.client.post(reverse('farewell_screen', kwargs={'door_id': door.id}), follow=True)
 		test_response_is_landing_page(self, response) # landing since we don't have the right credentials
@@ -74,7 +76,7 @@ class KioskAreaAccess(TestCase):
 
 	def test_login_to_area(self):
 		response = self.client.post(reverse('login_to_area', kwargs={'door_id': door.id}), follow=True)
-		test_response_is_login_page(self, response)
+		test_response_is_failed_login(self, response)
 		login_as_user(self.client)
 		response = self.client.post(reverse('login_to_area', kwargs={'door_id': door.id}), follow=True)
 		test_response_is_landing_page(self, response)  # landing since we don't have the right credentials
@@ -84,25 +86,44 @@ class KioskAreaAccess(TestCase):
 		response = self.client.post(reverse('login_to_area', kwargs={'door_id': 999}), follow=True)
 		self.assertEqual(response.status_code, 404)  # wrong door id
 		response = self.client.post(reverse('login_to_area', kwargs={'door_id': door.id}), follow=True)
-		self.assertTrue("Your badge wasn\\'t recognized" in str(response.content))
+		self.assertContains(response, "Your badge wasn't recognized")
 		response = self.client.post(reverse('login_to_area', kwargs={'door_id': door.id}), data={'badge_number':999}, follow=True)
-		self.assertTrue("Your badge wasn\\'t recognized" in str(response.content))
+		self.assertContains(response, "Your badge wasn't recognized")
 		response = self.client.post(reverse('login_to_area', kwargs={'door_id': door.id}), data={'badge_number': user.badge_number}, follow=True)
-		self.assertEqual(response.status_code, 200)
 		self.assertTrue(f"login_to_area/{door.id}" in response.request['PATH_INFO'])
-		self.assertTrue("You are not a member of any active projects" in str(response.content))  # user does not have active projects
+		self.assertContains(response=response, text="You are not a member of any active projects", status_code=200)  # user does not have active projects
 		user.projects.add(Project.objects.create(name="Project1", account=Account.objects.create(name="Account1")))
 		user.save()
 		response = self.client.post(reverse('login_to_area', kwargs={'door_id': door.id}), data={'badge_number': user.badge_number}, follow=True)
-		self.assertEqual(response.status_code, 200)
 		self.assertTrue(f"login_to_area/{door.id}" in response.request['PATH_INFO'])
-		self.assertTrue("Physical access denied" in str(response.content))  # user does not have access
+		self.assertContains(response=response, text="Physical access denied", status_code=200)  # user does not have access
 		user.physical_access_levels.add(PhysicalAccessLevel.objects.create(name="cleanroom access", area=door.area, schedule=PhysicalAccessLevel.Schedule.ALWAYS))
 		user.save()
+		door.area.maximum_capacity = 1
+		door.area.save()
+		# add a logged in person so capacity is reached
+		AreaAccessRecord.objects.create(area=door.area, customer=User.objects.create(username='test_staff2', first_name='Test', last_name='Staff', is_staff=True, badge_number=2222), project=Project.objects.get(name="Project1"), start=datetime.now())
+		staff = User.objects.create(username='test_staff1', first_name='Test', last_name='Staff', is_staff=True, badge_number=11111)
+		staff.projects.add(Project.objects.get(name="Project1"))
+		staff.physical_access_levels.add(PhysicalAccessLevel.objects.get(name="cleanroom access"))
+		staff.save()
+		self.client.force_login(user=user)
 		response = self.client.post(reverse('login_to_area', kwargs={'door_id': door.id}), data={'badge_number': user.badge_number}, follow=True)
-		self.assertEqual(response.status_code, 200)
+		self.assertContains(response, "This area has reached its maximum capacity.")
+		# staff can still login
+		response = self.client.post(reverse('login_to_area', kwargs={'door_id': door.id}), data={'badge_number': staff.badge_number}, follow=True)
 		self.assertTrue(f"login_to_area/{door.id}" in response.request['PATH_INFO'])
-		self.assertTrue("You're logged in to the " in str(response.content))
+		self.assertContains(response=response, text="You're logged in to the ", status_code=200)
+		self.assertTrue(AreaAccessRecord.objects.filter(area=door.area, customer=User.objects.get(badge_number=staff.badge_number)).exists())
+		# try again user, should fail
+		response = self.client.post(reverse('login_to_area', kwargs={'door_id': door.id}), data={'badge_number': user.badge_number}, follow=True)
+		self.assertContains(response, "This area has reached its maximum capacity.")
+		# increase capacity so user can login
+		door.area.maximum_capacity = 5
+		door.area.save()
+		response = self.client.post(reverse('login_to_area', kwargs={'door_id': door.id}), data={'badge_number': user.badge_number}, follow=True)
+		self.assertTrue(f"login_to_area/{door.id}" in response.request['PATH_INFO'])
+		self.assertContains(response=response, text="You're logged in to the ", status_code=200)
 		self.assertTrue(AreaAccessRecord.objects.filter(area=door.area, customer=User.objects.get(badge_number=user.badge_number)).exists())
 
 	def test_staff_login_to_area(self):

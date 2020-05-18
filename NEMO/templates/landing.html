@@ -86,9 +86,9 @@
 					{% with user.active_project_count as active_project_count %}
 						<div class="alert alert-info">
 							You are logged in to the <b>{{ user.area_access_record.area|lower }}</b>{% if self_log_out %} (<a href="{% url 'self_log_out' user.id %}">logout</a>){% endif %}.
-							Usage time is being billed to the project named <b>{{ user.billing_to_project }}</b>.
+							Usage time is being registered to the project named <b>{{ user.billing_to_project }}</b>.
 							{% if active_project_count > 1 %}
-								<a href="{% url 'change_project' %}">Click here to bill to a different project at any time.</a>
+								<a href="{% url 'change_project' %}">Click here to switch to a different project at any time.</a>
 							{% endif %}
 						</div>
 					{% endwith %}

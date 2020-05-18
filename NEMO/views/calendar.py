@@ -851,7 +851,7 @@ def reservation_details(request, reservation_id):
 	projects_to_exclude=[]
 	if exclude:
 		projects_to_exclude = [int(s) for s in exclude.split() if s.isdigit()]
-	active_projects = user.active_projects().exclude(id__in=projects_to_exclude)
+	active_projects = reservation.user.active_projects().exclude(id__in=projects_to_exclude)
 	reservation_project_can_be_changed = (request.user.is_staff or request.user == reservation.user) and reservation.has_not_ended and reservation.has_not_started and reservation.user.active_project_count() > 1
 	return render(request, 'calendar/reservation_details.html', {'reservation': reservation, 'reservation_project_can_be_changed': reservation_project_can_be_changed, 'active_projects': active_projects})
 

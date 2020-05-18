@@ -85,7 +85,19 @@
 						</div>
 						<div class="col-md-7 form-control-static light-grey">
 							List project id numbers to exclude from usage separated by spaces (you will not be able to make reservations or enable tools with these projects)
-				<h3>Calendar settings</h3>
+						</div>
+					</div>
+					<div class="form-group">
+						<div class="col-md-3">
+							<input type="submit" value="Save exclusions" class="btn btn-success">
+						</div>
+					</div>
+				</form>
+			</div>
+		</div>
+
+		<div class="panel panel-default">
+			<div class="panel-body">				<h3>Calendar settings</h3>
 				<form method="POST" action="{% url 'customize' 'calendar_settings' %}" class="form-horizontal">
 					{% csrf_token %}
 					<div class="form-group">
@@ -109,7 +121,7 @@
 					</div>
 					<div class="form-group">
 						<div class="col-md-3">
-							<input type="submit" value="Save exclusions" class="btn btn-success">
+							<input type="submit" value="Save settings" class="btn btn-success">
 						</div>
 					</div>
 				</form>

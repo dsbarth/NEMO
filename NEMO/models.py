@@ -5,6 +5,7 @@ import struct
 import pytz
 
 from time import sleep
+import sys
 from datetime import timedelta
 from logging import getLogger
 from pymodbus3.client.sync import ModbusTcpClient
@@ -809,6 +810,7 @@ class Area(models.Model):
 	name = models.CharField(max_length=200, help_text='What is the name of this area? The name will be displayed on the tablet login and logout pages.')
 	welcome_message = models.TextField(help_text='The welcome message will be displayed on the tablet login page. You can use HTML and JavaScript.')
 	maximum_capacity = models.PositiveIntegerField(help_text='The maximum number of people allowed in this area at any given time. Set to 0 for unlimited.', default=0)
+	reservation_warning = models.PositiveIntegerField(blank=True, null=True, help_text='The number of simultaneous reservations allowed in this area before a warning is displayed.')
 	require_buddy = models.BooleanField(default=False, help_text='Indicates that the buddy system is required in this area.')
 	force_buddy = models.BooleanField(default=False, help_text='Toggle to force activation of buddy system outside of usual hours (i.e. for a holiday).')
 	buddy_start = models.PositiveIntegerField(default=20, help_text='Time in 24 hour format of start of buddy system, if active and not forced')
@@ -835,7 +837,7 @@ class Area(models.Model):
 		return self.name
 
 	def warning_capacity(self):
-		return .75 * self.maximum_capacity
+		return self.reservation_warning if self.reservation_warning is not None else sys.maxsize
 
 	def danger_capacity(self):
 		return self.maximum_capacity

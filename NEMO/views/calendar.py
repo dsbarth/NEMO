@@ -5,7 +5,7 @@ from http import HTTPStatus
 from re import match
 from pandas import DataFrame, to_numeric
 from dateutil import relativedelta
-from typing import Union, List
+from typing import Union, List, Set
 
 from dateutil import rrule
 from django.contrib.admin.views.decorators import staff_member_required
@@ -338,8 +338,16 @@ def reservation_success(request, reservation: Reservation):
 			'max_location_time': max(max_location_time, reservation.start),
 		}
 		return render(request, 'calendar/reservation_warning.html', dictionary, status=201) # send 201 code CREATED to indicate success but with more information to come
-	else:
-		return HttpResponse()
+	if area:
+		if area.buddy_required(reservation.start) or area.buddy_required(reservation.end):
+			reservations_in_same_area = len(set(Reservation.objects.filter(cancelled=False, end__gte=reservation.start, start__lte=reservation.end, tool__in=Tool.objects.filter(_requires_area_access=area)).values_list('user')))
+			if reservations_in_same_area <= 3:
+				dictionary = {
+					'same_area_count': reservations_in_same_area-1,
+					'area': area,
+				}
+				return render(request, 'calendar/reservation_buddy_warning.html', dictionary, status=201) # send 201 code CREATED to indicate success but with more information to come
+	return HttpResponse()
 
 
 def maximum_overlap(reservations: List[Reservation]) -> (int, datetime):

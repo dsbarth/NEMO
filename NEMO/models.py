@@ -816,8 +816,11 @@ class Area(models.Model):
 	buddy_start = models.PositiveIntegerField(default=20, help_text='Time in 24 hour format of start of buddy system, if active and not forced')
 	buddy_end = models.PositiveIntegerField(default=8, help_text='Time in 24 hour format of end of buddy system, if active and not forced')
 
-	def buddy_required(self):
-		now = timezone.localtime(timezone.now())
+	def buddy_required(self, time=None):
+		if time:
+			now = time
+		else:
+			now = timezone.localtime(timezone.now())
 		saturday = 6
 		sunday = 7
 		if not self.require_buddy:

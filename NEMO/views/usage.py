@@ -258,9 +258,9 @@ def get_usage(start_date, end_date, user=None, projects=None, tool=None):
 
 	try:
 		if tool:
-			usage_events = UsageEvent.objects.filter(tool=tool.id, end__gt=start_date, end__lte=end_date)
-			missed_reservations = Reservation.objects.filter(tool=tool.id, missed=True, end__gt=start_date, end__lte=end_date)
-			training_sessions = TrainingSession.objects.filter(tool=tool.id, date__gt=start_date, date__lte=end_date)
+			usage_events = UsageEvent.objects.filter(tool=tool.id, end__gt=start_date, end__lte=end_date).order_by('end')
+			missed_reservations = Reservation.objects.filter(tool=tool.id, missed=True, end__gt=start_date, end__lte=end_date).order_by('end')
+			training_sessions = TrainingSession.objects.filter(tool=tool.id, date__gt=start_date, date__lte=end_date).order_by('date')
 			if projects:
 				usage_events = usage_events.filter(project__in=projects)
 				missed_reservations = missed_reservations.filter(project__in=projects)
@@ -270,12 +270,12 @@ def get_usage(start_date, end_date, user=None, projects=None, tool=None):
 				missed_reservations = missed_reservations.filter(user=user.id)
 				training_sessions = training_sessions.filter(trainee=user.id)
 		elif projects:
-			area_access = AreaAccessRecord.objects.filter(project__in=projects, end__gt=start_date, end__lte=end_date)
-			usage_events = UsageEvent.objects.filter(project__in=projects, end__gt=start_date, end__lte=end_date)
-			missed_reservations = Reservation.objects.filter(project__in=projects, missed=True, end__gt=start_date, end__lte=end_date)
-			staff_charges = StaffCharge.objects.filter(project__in=projects, end__gt=start_date, end__lte=end_date)
-			stockroom_purchases = StockroomWithdraw.objects.filter(project__in=projects, date__gt=start_date, date__lte=end_date)
-			training_sessions = TrainingSession.objects.filter(project__in=projects, date__gt=start_date, date__lte=end_date)
+			area_access = AreaAccessRecord.objects.filter(project__in=projects, end__gt=start_date, end__lte=end_date).order_by('end')
+			usage_events = UsageEvent.objects.filter(project__in=projects, end__gt=start_date, end__lte=end_date).order_by('end')
+			missed_reservations = Reservation.objects.filter(project__in=projects, missed=True, end__gt=start_date, end__lte=end_date).order_by('end')
+			staff_charges = StaffCharge.objects.filter(project__in=projects, end__gt=start_date, end__lte=end_date).order_by('end')
+			stockroom_purchases = StockroomWithdraw.objects.filter(project__in=projects, date__gt=start_date, date__lte=end_date).order_by('date')
+			training_sessions = TrainingSession.objects.filter(project__in=projects, date__gt=start_date, date__lte=end_date).order_by('date')
 			if user:
 				area_access = area_access.filter(customer=user.id)
 				usage_events = usage_events.filter(user=user.id)
@@ -284,12 +284,12 @@ def get_usage(start_date, end_date, user=None, projects=None, tool=None):
 				stockroom_purchases = stockroom_purchases.filter(customer=user.id)
 				training_sessions = training_sessions.filter(trainee=user.id)
 		elif user:
-			area_access = AreaAccessRecord.objects.filter(customer=user.id, end__gt=start_date, end__lte=end_date)
-			usage_events = UsageEvent.objects.filter(user=user.id, end__gt=start_date, end__lte=end_date)
-			missed_reservations = Reservation.objects.filter(user=user.id, missed=True, end__gt=start_date, end__lte=end_date)
-			staff_charges = StaffCharge.objects.filter(customer=user.id, end__gt=start_date, end__lte=end_date)
-			stockroom_purchases = StockroomWithdraw.objects.filter(customer=user.id, date__gt=start_date, date__lte=end_date)
-			training_sessions = TrainingSession.objects.filter(trainee=user.id, date__gt=start_date, date__lte=end_date)
+			area_access = AreaAccessRecord.objects.filter(customer=user.id, end__gt=start_date, end__lte=end_date).order_by('end')
+			usage_events = UsageEvent.objects.filter(user=user.id, end__gt=start_date, end__lte=end_date).order_by('end')
+			missed_reservations = Reservation.objects.filter(user=user.id, missed=True, end__gt=start_date, end__lte=end_date).order_by('end')
+			staff_charges = StaffCharge.objects.filter(customer=user.id, end__gt=start_date, end__lte=end_date).order_by('end')
+			stockroom_purchases = StockroomWithdraw.objects.filter(customer=user.id, date__gt=start_date, date__lte=end_date).order_by('date')
+			training_sessions = TrainingSession.objects.filter(trainee=user.id, date__gt=start_date, date__lte=end_date).order_by('date')
 	except:
 		pass
 

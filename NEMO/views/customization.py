@@ -42,6 +42,8 @@ customizable_key_values = [
 	'self_log_out',
 	'calendar_view',
 	'calendar_first_day_of_week',
+	'audio_ip',
+	'audio_port',
 	]
 
 customizable_content = [

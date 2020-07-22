@@ -13,6 +13,7 @@ from NEMO.exceptions import InactiveUserError, NoActiveProjectsForUserError, Phy
 from NEMO.models import AreaAccessRecord, Door, PhysicalAccessLog, PhysicalAccessType, Project, User, UsageEvent, Area
 from NEMO.tasks import postpone
 from NEMO.views.policy import check_policy_to_enter_this_area, check_policy_to_enter_any_area
+from NEMO.views.intercom import logout_annoucement
 
 
 @login_required
@@ -180,11 +181,13 @@ def logout_of_area(request, door_id):
 		busy_tools = UsageEvent.objects.filter(end=None, user=user)
 		if record.area.buddy_required():
 			if occupants == 2:
+				logout_annoucement(record.area)
 				if busy_tools:
 					return render(request, 'area_access/buddy_logout_reminder.html', {'area': record.area, 'name': user.first_name, 'tools_in_use': busy_tools})
 				else:
 					return render(request, 'area_access/buddy_logout_reminder.html', {'area': record.area, 'name': user.first_name})
 			elif occupants == 1:
+				logout_annoucement(record.area)
 				if busy_tools:
 					return render(request, 'area_access/buddy_logout_warning.html', {'area': record.area, 'name': user.first_name, 'tools_in_use': busy_tools})
 				else:

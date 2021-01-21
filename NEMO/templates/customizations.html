@@ -97,6 +97,38 @@
 		</div>
 
 		<div class="panel panel-default">
+			<div class="panel-body">				<h3>Calendar settings</h3>
+				<form method="POST" action="{% url 'customize' 'calendar_settings' %}" class="form-horizontal">
+					{% csrf_token %}
+					<div class="form-group">
+						<div class="col-md-12">
+							<label class="control-label col-md-2" >Default view:</label>
+							<div class="checkbox">
+								<label><input type="radio" id="calendar_view" name="calendar_view" {% if not calendar_view or calendar_view == 'agendaWeek' %}checked{% endif %} value="agendaWeek"> Week view</label>
+								<label><input type="radio" id="calendar_view" name="calendar_view" {% if calendar_view == 'month' %}checked{% endif %} value="month"> Month view</label>
+								<label><input type="radio" id="calendar_view" name="calendar_view" {% if calendar_view == 'agendaDay' %}checked{% endif %} value="agendaDay"> Day view</label>
+							</div>
+						</div>
+					</div>
+					<div class="form-group">
+						<div class="col-md-12">
+							<label class="control-label col-md-2" >First day of the week:</label>
+							<div class="checkbox">
+								<label><input type="radio" id="calendar_first_day_of_week" name="calendar_first_day_of_week" {% if not calendar_first_day_of_week or calendar_first_day_of_week == '1' %}checked{% endif %} value="1"> Monday</label>
+								<label><input type="radio" id="calendar_first_day_of_week" name="calendar_first_day_of_week" {% if calendar_first_day_of_week == '0' %}checked{% endif %} value="0"> Sunday</label>
+							</div>
+						</div>
+					</div>
+					<div class="form-group">
+						<div class="col-md-3">
+							<input type="submit" value="Save settings" class="btn btn-success">
+						</div>
+					</div>
+				</form>
+			</div>
+		</div>
+
+		<div class="panel panel-default">
 			<div class="panel-body">
 				<h3>Application settings</h3>
 				<form method="POST" action="{% url 'customize' 'application_settings' %}" class="form-horizontal">
@@ -189,6 +221,55 @@
 					<div class="customization-separation"></div>
 					<button type="button" class="btn btn-info" data-toggle="collapse" data-target="#nanofab_rules_tutorial_render">Show current content</button>
 					<div id="nanofab_rules_tutorial_render" class="collapse customization-content">{{ nanofab_rules_tutorial }}</div>
+				{% endif %}
+			</div>
+		</div>
+
+		<div class="panel panel-default">
+			<div class="panel-body">
+				<h3>&quot;<a href="{% url 'authorization_failed' %}" target="_blank"> {{ facility_name }} failed login</a>&quot; page</h3>
+				<p>This page is displayed after authentication when either no matching username could be found in NEMO's database or if that user has been deactivated.
+					<br>The HTML you upload is rendered with the Django template engine. You can use JavaScript (including jQuery) within the page.</p>
+				<form method="POST" action="{% url 'customize' 'authorization_failed' %}" enctype="multipart/form-data">
+					{% csrf_token %}
+					<div class="form-group">
+						<input type="file" name="authorization_failed" class="customization-input-file" onchange="this.style.color = 'inherit';$('#authorization_failed_span').hide()">
+						{% if authorization_failed %}<span id="authorization_failed_span">authorization_failed.html</span>{% endif %}
+					</div>
+					<div class="form-group">
+						<input type="submit" value="Upload failed login page" class="btn btn-success">
+					</div>
+				</form>
+				{% if authorization_failed %}
+					<div class="customization-separation"></div>
+					<button type="button" class="btn btn-info" data-toggle="collapse" data-target="#authorization_failed_render">Show current content</button>
+					<div id="authorization_failed_render" class="collapse customization-content">{{ authorization_failed }}</div>
+				{% endif %}
+			</div>
+		</div>
+
+		<div class="panel panel-default">
+			<div class="panel-body">
+				<h3>&quot;<a href="{% url 'jumbotron' %}" target="_blank">Jumbotron</a>&quot; watermark</h3>
+				<p>This image is displayed as background for the Jumbotron. It is set as a full background screen, so your image needs to take that into account.
+					<br>The image you upload should be a valid image file (recommended size is 1500x1000).
+				</p>
+				<form method="POST" action="{% url 'customize' 'jumbotron_watermark' %}" enctype="multipart/form-data">
+					{% csrf_token %}
+					<div class="form-group">
+						<input type="file" name="jumbotron_watermark" class="customization-input-file" onchange="this.style.color = 'inherit';$('#jumbotron_watermark_span').hide()">
+						{% if jumbotron_watermark %}<span id="jumbotron_watermark_span">jumbotron_watermark.png</span>{% endif %}
+					</div>
+					<div class="form-group">
+						<input type="submit" value="Upload jumbotron Watermark image" class="btn btn-success">
+					</div>
+				</form>
+				{% if jumbotron_watermark %}
+					<div class="customization-separation"></div>
+					<button type="button" class="btn btn-info" data-toggle="collapse" data-target="#jumbotron_watermark_render">Show current content</button>
+					<div id="jumbotron_watermark_render" class="collapse customization-content" style="white-space: normal">
+						<img alt="jumbotron_watermark" src="{{ MEDIA_URL }}jumbotron_watermark.png" height="400px" style="border: 1px solid #ddd"/>
+					</div>
 				{% endif %}
 			</div>
 		</div>
@@ -644,6 +725,38 @@
 					<div class="customization-separation"></div>
 					<button type="button" class="btn btn-info" data-toggle="collapse" data-target="#daily_passdown_email_render">Show current content</button>
 					<div id="daily_passdown_email_render" class="collapse customization-content">{{ daily_passdown_email }}</div>
+				{% endif %}
+				</div>
+			</div>
+
+		<div class="panel panel-default">
+			<div class="panel-body">
+				<h3>Tool Rates</h3>
+				<p>
+					You can upload a json file for NEMO to display tool rates. An example of a valid rates file can be found on <a target="_blank" href="https://github.com/usnistgov/NEMO/raw/master/resources/splash_pad_rates.json">Github</a>.
+					<br><br>It should be a JSON array of elements, and the following key/values are supported for each element:
+				</p>
+				<ul>
+					<li><b>item_id</b> - the id of the tool or supply</li>
+					<li><b>table_id</b> - the type of rate, one of "inventory_rate" (for supplies), "primetime_eq_hourly_rate" (for tool), "training_individual_hourly_rate" (for individual training rate), "training_group_hourly_rate" (for group training rate)</li>
+					<li><b>rate_class</b> - the class, one of "full cost" or "cost shared"</li>
+					<li><b>rate</b> - the rate amount</li>
+    				<li>item - the name of the item (optional)</li>
+				</ul>
+				<form method="POST" action="{% url 'customize' 'rates' %}" enctype="multipart/form-data">
+					{% csrf_token %}
+					<div class="form-group">
+						<input type="file" name="rates" class="customization-input-file" onchange="this.style.color = 'inherit';$('#rates_span').hide()">
+						{% if rates %}<span id="rates_span">rates.json</span>{% endif %}
+					</div>
+					<div class="form-group">
+						<input type="submit" value="Upload rates file" class="btn btn-success">
+					</div>
+				</form>
+				{% if rates %}
+					<div class="customization-separation"></div>
+					<button type="button" class="btn btn-info" data-toggle="collapse" data-target="#rates_render">Show current content</button>
+					<div id="rates_render" class="collapse customization-content">{{ rates }}</div>
 				{% endif %}
 			</div>
 		</div>

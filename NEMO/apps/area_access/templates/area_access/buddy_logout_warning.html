@@ -1,0 +1,19 @@
+<script>$('body').removeClass().addClass('logout-error')</script>
+<h1><p>{% now "h:i A" %}</p>You're now logged out of the {{ area|lower }}, {{ name }}.</h1>
+<audio src="{% url 'media' 'warning.mp3' %}" autoplay></audio>
+
+<h2>
+	<p>There is now only a single labmember remaining in {{ area }}. Please warn that labmember that you are leaving to ensure safe lab usage according to the Buddy System. </p>
+</h2>
+
+{% if tools_in_use %}
+	<h2>
+		<p>In addition, you are currently still logged in to the following tools:</p>
+		<ul>
+			{% for usage_event in tools_in_use %}
+				<li>{{ usage_event.tool.name }}</li>
+			{% endfor %}
+		</ul>
+	</h2>
+{% endif %}
+<script>revert(10);</script>

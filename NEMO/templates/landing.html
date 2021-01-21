@@ -19,6 +19,21 @@
 			</div>
 		</div>
 	{% endif %}
+	{% if occupants %}
+		{% if user.area_access_record.area.buddy_required and occupants <= 3 %}
+			<div class="row">
+				<div class="col-lg-12">
+						<div class="well clearfix">
+							<div class="col-lg-2 text-center"><img src="{% static 'icons/caution.png' %}" height="128" width="128"></div>
+							<div class="col-lg-8 text-center">
+								<h2 style="color: red">Low Occupancy in {{ user.area_access_record.area }}</h2>
+								<p style="text-align: center; color: red">{{ user.area_access_record.area }} is currently in a low occupancy state. Please ensure that you are abiding by the buddy system, and remain aware of other labmembers to serve as an effective safety buddy.</p>
+							</div>
+						</div>
+				</div>
+			</div>
+		{% endif %}
+	{% endif %}
 	<div class="row">
 		{% if upcoming_reservations %}
 			<div class="col-lg-4">
@@ -71,9 +86,9 @@
 					{% with user.active_project_count as active_project_count %}
 						<div class="alert alert-info">
 							You are logged in to the <b>{{ user.area_access_record.area|lower }}</b>{% if self_log_out %} (<a href="{% url 'self_log_out' user.id %}">logout</a>){% endif %}.
-							Usage time is being billed to the project named <b>{{ user.billing_to_project }}</b>.
+							Usage time is being registered to the project named <b>{{ user.billing_to_project }}</b>.
 							{% if active_project_count > 1 %}
-								<a href="{% url 'change_project' %}">Click here to bill to a different project at any time.</a>
+								<a href="{% url 'change_project' %}">Click here to switch to a different project at any time.</a>
 							{% endif %}
 						</div>
 					{% endwith %}

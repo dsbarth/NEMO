@@ -18,6 +18,7 @@
 			<li class="dropdown-header">Which type of events would you like<br>to view on the calendar?</li>
 			<li data-toggle="tooltip" data-placement="right" title="Displays tool reservations. While viewing reservations, the 'Personal schedule' link shows your reservations for all tools. Select a tool to view everyone's reservations for that tool."><a href="javascript:void(0)" onclick="change_calendar_event_type(this)">Reservations</a></li>
 			<li data-toggle="tooltip" data-placement="right" title="Displays your {{ facility_name }} usage. This includes area access, tool usage, and missed reservations (which are all billable items)."><a href="javascript:void(0)" onclick="change_calendar_event_type(this)">Usage</a></li>
+			<li data-toggle="tooltip" data-placement="right" title="Displays all upcoming reservations on all tools to help enable scheduling to comply with the Buddy System."><a href="javascript:void(0)" onclick="change_calendar_event_type(this)">Buddy View</a></li>
 			{% if user.is_staff %}
 				<li data-toggle="tooltip" data-placement="right" title="Displays {{ facility_name }} reservations and usage for a specific user. This includes reservations, area access, tool usage, and missed reservations."><a href="javascript:void(0)" onclick="change_calendar_event_type(this)">Specific user</a></li>
 			{% endif %}
@@ -86,6 +87,11 @@ function update_event_sources()
 			tool_event_source.data.tool_id = item;
 	}
 
+	else if(event_type === 'buddy view')
+	{
+		tool_event_source.color = "#33ad33";
+	}
+
 	else if(event_type === 'specific user')
 	{
 		if($("#user_search").typeahead('val'))
@@ -134,6 +140,13 @@ function event_creation_success_callback(response, status, xml_http_request, aja
 	{# If the response is empty then the reservation was successfully created. #}
 	if(response === "")
 		refresh_calendar_and_sidebar();
+	else if (xml_http_request.status === 201)
+	{
+	    {# reservation was created but there is some extra information to display #}
+		refresh_calendar_and_sidebar();
+		$("#dialog .modal-content").html(response);
+		$("#dialog").modal('show');
+	}
 	else {# the response was non-empty so the tool requires configuration details before the reservation is created. #}
 	{
 		{# Construct the configuration dialog that is contained in the server response. #}
@@ -224,7 +237,7 @@ function resize(event, delta, revertFunc, jsEvent, ui, view)
 		"delta": delta.asMinutes()
 	};
 	if(type === "Reservation")
-		ajax_post("{% url 'resize_reservation' %}", event_changes, undefined, [revertFunc, ajax_failure_callback("Reservation resize failed")], refresh_calendar_and_sidebar);
+		ajax_post("{% url 'resize_reservation' %}", event_changes, event_creation_success_callback, [revertFunc, ajax_failure_callback("Reservation resize failed")], refresh_calendar_and_sidebar);
 	else if(type === "Outage")
 		ajax_post("{% url 'resize_outage' %}", event_changes, undefined, [revertFunc, ajax_failure_callback("Outage resize failed")], refresh_calendar_and_sidebar);
 }
@@ -241,7 +254,7 @@ function move(event, delta, revertFunc, jsEvent, ui, view)
 		"delta": delta.asMinutes()
 	};
 	if(type === "Reservation")
-		ajax_post("{% url 'move_reservation' %}", event_changes, undefined, [revertFunc, ajax_failure_callback("Reservation move failed")], refresh_calendar_and_sidebar);
+		ajax_post("{% url 'move_reservation' %}", event_changes, event_creation_success_callback, [revertFunc, ajax_failure_callback("Reservation move failed")], refresh_calendar_and_sidebar);
 	else if(type === "Outage")
 		ajax_post("{% url 'move_outage' %}", event_changes, undefined, [revertFunc, ajax_failure_callback("Outage move failed")], refresh_calendar_and_sidebar);
 }
@@ -282,6 +295,12 @@ function set_reservation_title(url, reservation_id, title)
 	ajax_post(url, {'title': title}, refresh_calendar_and_sidebar, [failure_dialog, refresh_calendar_and_sidebar]);
 }
 
+function change_reservation_project(url, project_id)
+{
+	var failure_dialog = ajax_failure_callback("Unable to change reservation project");
+	ajax_post(url, {'project_id': project_id}, refresh_calendar_and_sidebar, [failure_dialog, refresh_calendar_and_sidebar]);
+}
+
 function on_browser_resize()
 {
 	$('#calendar').fullCalendar('option', 'height', $("#calendar").height());
@@ -310,9 +329,9 @@ function create_calendar()
 				"titleFormat": 'MMMM YYYY'
 			}
 		},
-		"firstDay": 1, {# Make Monday the first day of the week #}
+		"firstDay": {{ calendar_first_day_of_week }}, {# Make Monday the first day of the week #}
 		"scrollTime": '07:00:00', {# The day starts at 7 AM #}
-		"defaultView": "agendaWeek",
+		"defaultView": "{{ calendar_view }}",
 		"allDaySlot": false,
 		"allDayDefault": false,
 		"slotDuration": '00:15:00', {# 15 minutes each row #}
@@ -458,6 +477,18 @@ function change_calendar_event_type(calling_element)
 		expand_collapse.show();
 		tool_search.show();
 		tool_tree.show();
+		$(proxy_reservation_button).hide();
+		$(scheduled_outage_button).hide();
+		update_event_sources();
+	}
+	else if(event_type === "buddy view")
+	{
+		user_search.hide();
+		chosen_user_button.hide();
+		extra_links.hide();
+		expand_collapse.hide();
+		tool_search.hide();
+		tool_tree.hide();
 		$(proxy_reservation_button).hide();
 		$(scheduled_outage_button).hide();
 		update_event_sources();

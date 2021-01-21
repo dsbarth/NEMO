@@ -1,14 +1,17 @@
 from logging import getLogger
-
+from json import loads
 from django.conf import settings
 from django.contrib.admin.views.decorators import staff_member_required
 from django.contrib.auth.decorators import login_required
 from django.shortcuts import render
 from django.urls import reverse
 from django.views.decorators.http import require_GET
+from django.http import HttpResponse
 from requests import get
 
-from NEMO.models import AreaAccessRecord, ConsumableWithdraw, Reservation, StaffCharge, TrainingSession, UsageEvent, User, Project, Account
+from xlsxwriter.workbook import Workbook
+
+from NEMO.models import AreaAccessRecord, Reservation, StaffCharge, TrainingSession, UsageEvent, User, Project, Account, StockroomWithdraw, Tool
 from NEMO.utilities import get_month_timeframe, month_list, parse_start_and_end_date
 
 
@@ -59,14 +62,28 @@ def date_parameters_dictionary(request):
 		start_date, end_date = get_month_timeframe()
 	kind = request.GET.get("type")
 	identifier = request.GET.get("id")
+	customer = request.GET.get("customer")
+	tool = request.GET.get("tool")
 	dictionary = {
 		'month_list': month_list(),
 		'start_date': start_date,
 		'end_date': end_date,
 		'kind': kind,
 		'identifier': identifier,
-		'tab_url': get_url_for_other_tab(request)
+		'tab_url': get_url_for_other_tab(request),
+		'customer': None,
+		'tool': None,
 	}
+	if request.user.is_staff:
+		dictionary['users'] = User.objects.all()
+		dictionary['tools'] = Tool.objects.all()
+	try:
+		if customer:
+			dictionary['customer'] = User.objects.get(id=customer)
+		if tool:
+			dictionary['tool'] = Tool.objects.get(id=tool)
+	except:
+		pass
 	return dictionary, start_date, end_date, kind, identifier
 
 
@@ -74,16 +91,147 @@ def date_parameters_dictionary(request):
 @require_GET
 def usage(request):
 	base_dictionary, start_date, end_date, kind, identifier = date_parameters_dictionary(request)
-	dictionary = {
-		'area_access': AreaAccessRecord.objects.filter(customer=request.user, end__gt=start_date, end__lte=end_date),
-		'consumables': ConsumableWithdraw.objects.filter(customer=request.user, date__gt=start_date, date__lte=end_date),
-		'missed_reservations': Reservation.objects.filter(user=request.user, missed=True, end__gt=start_date, end__lte=end_date),
-		'staff_charges': StaffCharge.objects.filter(customer=request.user, end__gt=start_date, end__lte=end_date),
-		'training_sessions': TrainingSession.objects.filter(trainee=request.user, date__gt=start_date, date__lte=end_date),
-		'usage_events': UsageEvent.objects.filter(user=request.user, end__gt=start_date, end__lte=end_date),
-	}
-	dictionary['no_charges'] = not (dictionary['area_access'] or dictionary['consumables'] or dictionary['missed_reservations'] or dictionary['staff_charges'] or dictionary['training_sessions'] or dictionary['usage_events'])
+	dictionary = get_usage(start_date, end_date, user=request.user)
+	dictionary['no_charges'] = not (dictionary['area_access'] or dictionary['stockroom_purchases'] or dictionary['missed_reservations'] or dictionary['staff_charges'] or dictionary['training_sessions'] or dictionary['usage_events'])
 	return render(request, 'usage/usage.html', {**base_dictionary, **dictionary})
+
+
+@login_required
+@require_GET
+def usagexlsx(request):
+	base_dictionary, start_date, end_date, kind, identifier = date_parameters_dictionary(request)
+	if not request.user.is_staff:
+		user = request.user
+	elif base_dictionary['customer'] and request.user.is_staff:
+		user = base_dictionary['customer']
+	else:
+		user = None
+	tool = None
+	projects = []
+	if request.user.is_staff:
+		selection = ''
+		try:
+			if kind == 'application':
+				projects = Project.objects.filter(application_identifier=identifier)
+				selection = identifier
+			elif kind == 'project':
+				projects = [Project.objects.get(id=identifier)]
+				selection = projects[0].name
+			elif kind == 'account':
+				account = Account.objects.get(id=identifier)
+				projects = Project.objects.filter(account=account)
+				selection = account.name
+		except:
+			pass
+		tool = base_dictionary['tool']
+
+	dictionary = get_usage(start_date,end_date,user,projects,tool)
+	area_access = dictionary['area_access'].values('customer__username', 'area__name', 'start', 'end', 'project__name') if dictionary['area_access'] else None
+	usage_record = dictionary['usage_events'].values('user__username', 'tool__name', 'start', 'end', 'project__name', 'run_data') if dictionary['usage_events'] else None
+	stockroom_purchases = dictionary['stockroom_purchases'].values('customer__username', 'stock__name', 'stock__cost', 'quantity', 'date', 'project__name') if dictionary['stockroom_purchases'] else None
+	staff_charges = dictionary['staff_charges'].values('staff_member__username', 'customer__username','start', 'end','project__name') if dictionary['staff_charges'] else None
+	date_format_str = 'yyyy/mm/dd hh:mm'
+	fn = "usage_report" + "_" + start_date.strftime("%Y%m%d") + "_" + end_date.strftime("%Y%m%d") + ".xlsx"
+	response = HttpResponse(content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+	response['Content-Disposition'] = 'attachment; filename = "%s"' % fn
+	book = Workbook(response, {'in_memory': True, 'remove_timezone': True})
+	date_format = book.add_format({'num_format': date_format_str, 'align': 'left'})
+	bold = book.add_format({'bold': True})
+	if area_access:
+		area_sheet = book.add_worksheet('Area Access')
+		area_sheet.set_column(0, 1, 18)
+		area_sheet.set_column(2,3,18)
+		area_sheet.set_column(5, 5, 50)
+		headings = ['Username','Area','Start','End','Duration (Hours)','Project']
+		area_sheet.write_row(0,0,headings, bold)
+		for row_num, row_data in enumerate(area_access):
+			duration = (row_data['end'] - row_data['start']).total_seconds()/60/60
+			area_sheet.write(row_num + 1, 0, row_data['customer__username'])
+			area_sheet.write(row_num + 1, 1, row_data['area__name'])
+			area_sheet.write_datetime(row_num + 1, 2, (row_data['start']).astimezone(tz=None), date_format)
+			area_sheet.write_datetime(row_num + 1, 3, (row_data['end']).astimezone(tz=None), date_format)
+			area_sheet.write(row_num + 1, 4, duration)
+			area_sheet.write(row_num + 1, 5, row_data['project__name'])
+
+	if usage_record:
+		usage_sheet = book.add_worksheet('Tool Usage')
+		usage_sheet.set_column(0, 0, 12)
+		usage_sheet.set_column(1,1,30)
+		usage_sheet.set_column(2, 3, 18)
+		usage_sheet.set_column(5, 5, 50)
+		usage_sheet.set_column(6, 6, 18)
+		headings = ['Username','Tool','Start','End','Duration (Hours)','Project']
+		if request.user.is_staff:
+			headings.append('Run Data')
+		usage_sheet.write_row(0,0,headings, bold)
+		for row_num, row_data in enumerate(usage_record):
+			duration = (row_data['end'] - row_data['start']).total_seconds()/60/60
+			usage_sheet.write(row_num + 1, 0, row_data['user__username'])
+			usage_sheet.write(row_num + 1, 1, row_data['tool__name'])
+			usage_sheet.write_datetime(row_num + 1, 2, (row_data['start']).astimezone(tz=None), date_format)
+			usage_sheet.write_datetime(row_num + 1, 3, (row_data['end']).astimezone(tz=None), date_format)
+			usage_sheet.write(row_num + 1, 4, duration)
+			usage_sheet.write(row_num + 1, 5, row_data['project__name'])
+			if row_data['run_data'] and request.user.is_staff:
+				count = 1
+				for key, value in loads(row_data['run_data']).items():
+					try:
+						value = float(value)
+					except:
+						pass
+					usage_sheet.write(row_num + 1, 5 + count, key)
+					usage_sheet.write(row_num + 1, 5 + count + 1, value)
+					count += 2
+
+	if stockroom_purchases:
+		stockroom_sheet = book.add_worksheet('Stockroom Purchases')
+		stockroom_sheet.set_column(0, 0, 12)
+		stockroom_sheet.set_column(1,1,30)
+		stockroom_sheet.set_column(4, 4, 18)
+		stockroom_sheet.set_column(5, 5, 50)
+		headings = ['Username','Item','Quantity','Unit Price','Date','Project']
+		stockroom_sheet.write_row(0,0,headings, bold)
+		for row_num, row_data in enumerate(stockroom_purchases):
+			stockroom_sheet.write(row_num + 1, 0, row_data['customer__username'])
+			stockroom_sheet.write(row_num + 1, 1, row_data['stock__name'])
+			stockroom_sheet.write(row_num + 1, 2, row_data['quantity'])
+			stockroom_sheet.write(row_num + 1, 3, row_data['stock__cost'])
+			stockroom_sheet.write_datetime(row_num + 1, 4, (row_data['date']).astimezone(tz=None), date_format)
+			stockroom_sheet.write(row_num + 1, 5, row_data['project__name'])
+
+	if staff_charges:
+		staffcharge_sheet = book.add_worksheet('Staff Charges')
+		staffcharge_sheet.set_column(0, 0, 12)
+		staffcharge_sheet.set_column(1,1,14)
+		staffcharge_sheet.set_column(2, 3, 18)
+		staffcharge_sheet.set_column(5, 5, 50)
+		headings = ['Username','Staff Member','Start','End','Duration (Hours)','Project']
+		staffcharge_sheet.write_row(0,0,headings, bold)
+		for row_num, row_data in enumerate(staff_charges):
+			duration = (row_data['end'] - row_data['start']).total_seconds()/60/60
+			staffcharge_sheet.write(row_num + 1, 0, row_data['customer__username'])
+			staffcharge_sheet.write(row_num + 1, 1, row_data['staff_member__username'])
+			staffcharge_sheet.write_datetime(row_num + 1, 2, (row_data['start']).astimezone(tz=None), date_format)
+			staffcharge_sheet.write_datetime(row_num + 1, 3, (row_data['end']).astimezone(tz=None), date_format)
+			staffcharge_sheet.write(row_num + 1, 4, duration)
+			staffcharge_sheet.write(row_num + 1, 5, row_data['project__name'])
+
+	if request.user.is_staff:
+		filter_parameters = book.add_worksheet('Filter Parameters')
+		filter_parameters.write(0, 0, 'Filter Parameters', bold)
+		filter_parameters.write_row(1, 0, ['Start','End','User','Tool','Projects'], bold)
+		filter_parameters.write(2, 0, start_date, date_format)
+		filter_parameters.write(2, 1, end_date, date_format)
+		if user:
+			filter_parameters.write(2, 2, user.username)
+		if tool:
+			filter_parameters.write(2, 3, tool.name)
+		if projects:
+			for count, proj in enumerate(projects):
+				filter_parameters.write(2+count,4,proj.name)
+	book.close()
+
+	return response
 
 
 @login_required
@@ -97,6 +245,65 @@ def billing(request):
 	except Exception as e:
 		logger.warning(str(e))
 		return render(request, 'usage/billing.html', base_dictionary)
+
+
+def get_usage(start_date, end_date, user=None, projects=None, tool=None):
+
+	area_access = None
+	usage_events = None
+	missed_reservations = None
+	staff_charges = None
+	stockroom_purchases = None
+	training_sessions = None
+
+	try:
+		if tool:
+			usage_events = UsageEvent.objects.filter(tool=tool.id, end__gt=start_date, end__lte=end_date).order_by('end')
+			missed_reservations = Reservation.objects.filter(tool=tool.id, missed=True, end__gt=start_date, end__lte=end_date).order_by('end')
+			training_sessions = TrainingSession.objects.filter(tool=tool.id, date__gt=start_date, date__lte=end_date).order_by('date')
+			if projects:
+				usage_events = usage_events.filter(project__in=projects)
+				missed_reservations = missed_reservations.filter(project__in=projects)
+				training_sessions = training_sessions.filter(project__in=projects)
+			if user:
+				usage_events = usage_events.filter(user=user.id)
+				missed_reservations = missed_reservations.filter(user=user.id)
+				training_sessions = training_sessions.filter(trainee=user.id)
+		elif projects:
+			area_access = AreaAccessRecord.objects.filter(project__in=projects, end__gt=start_date, end__lte=end_date).order_by('end')
+			usage_events = UsageEvent.objects.filter(project__in=projects, end__gt=start_date, end__lte=end_date).order_by('end')
+			missed_reservations = Reservation.objects.filter(project__in=projects, missed=True, end__gt=start_date, end__lte=end_date).order_by('end')
+			staff_charges = StaffCharge.objects.filter(project__in=projects, end__gt=start_date, end__lte=end_date).order_by('end')
+			stockroom_purchases = StockroomWithdraw.objects.filter(project__in=projects, date__gt=start_date, date__lte=end_date).order_by('date')
+			training_sessions = TrainingSession.objects.filter(project__in=projects, date__gt=start_date, date__lte=end_date).order_by('date')
+			if user:
+				area_access = area_access.filter(customer=user.id)
+				usage_events = usage_events.filter(user=user.id)
+				missed_reservations = missed_reservations.filter(user=user.id)
+				staff_charges = staff_charges.filter(customer=user.id)
+				stockroom_purchases = stockroom_purchases.filter(customer=user.id)
+				training_sessions = training_sessions.filter(trainee=user.id)
+		elif user:
+			area_access = AreaAccessRecord.objects.filter(customer=user.id, end__gt=start_date, end__lte=end_date).order_by('end')
+			usage_events = UsageEvent.objects.filter(user=user.id, end__gt=start_date, end__lte=end_date).order_by('end')
+			missed_reservations = Reservation.objects.filter(user=user.id, missed=True, end__gt=start_date, end__lte=end_date).order_by('end')
+			staff_charges = StaffCharge.objects.filter(customer=user.id, end__gt=start_date, end__lte=end_date).order_by('end')
+			stockroom_purchases = StockroomWithdraw.objects.filter(customer=user.id, date__gt=start_date, date__lte=end_date).order_by('date')
+			training_sessions = TrainingSession.objects.filter(trainee=user.id, date__gt=start_date, date__lte=end_date).order_by('date')
+	except:
+		pass
+
+	dictionary = {
+		'accounts_and_applications': set(Account.objects.all()) | set(Project.objects.all()) | set(get_project_applications()),
+		'area_access': area_access,
+		'missed_reservations': missed_reservations,
+		'staff_charges': staff_charges,
+		'training_sessions': training_sessions,
+		'usage_events': usage_events,
+		'stockroom_purchases': stockroom_purchases,
+	}
+
+	return dictionary
 
 
 @staff_member_required(login_url=None)
@@ -119,18 +326,14 @@ def project_usage(request):
 			selection = account.name
 	except:
 		pass
-	dictionary = {
-		'accounts_and_applications': set(Account.objects.all()) | set(Project.objects.all()) | set(get_project_applications()),
-		'area_access': AreaAccessRecord.objects.filter(project__in=projects, end__gt=start_date, end__lte=end_date) if projects else None,
-		'consumables': ConsumableWithdraw.objects.filter(project__in=projects, date__gt=start_date, date__lte=end_date) if projects else None,
-		'missed_reservations': Reservation.objects.filter(project__in=projects, missed=True, end__gt=start_date, end__lte=end_date) if projects else None,
-		'staff_charges': StaffCharge.objects.filter(project__in=projects, end__gt=start_date, end__lte=end_date) if projects else None,
-		'training_sessions': TrainingSession.objects.filter(project__in=projects, date__gt=start_date, date__lte=end_date) if projects else None,
-		'usage_events': UsageEvent.objects.filter(project__in=projects, end__gt=start_date, end__lte=end_date) if projects else None,
-		'project_autocomplete': True,
-		'selection': selection
-	}
-	dictionary['no_charges'] = not (dictionary['area_access'] or dictionary['consumables'] or dictionary['missed_reservations'] or dictionary['staff_charges'] or dictionary['training_sessions'] or dictionary['usage_events'])
+
+	tool = base_dictionary['tool']
+	user = base_dictionary['customer']
+
+	dictionary = get_usage(start_date,end_date,user=user,projects=projects,tool=tool)
+	dictionary['project_autocomplete'] = True
+	dictionary['selection'] = selection
+	dictionary['no_charges'] = not (dictionary['area_access'] or dictionary['stockroom_purchases'] or dictionary['missed_reservations'] or dictionary['staff_charges'] or dictionary['training_sessions'] or dictionary['usage_events'])
 	return render(request, 'usage/usage.html', {**base_dictionary, **dictionary})
 
 

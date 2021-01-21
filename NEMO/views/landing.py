@@ -9,7 +9,7 @@ from django.urls import Resolver404, resolve
 from django.utils import timezone
 from django.views.decorators.http import require_GET
 
-from NEMO.models import Alert, LandingPageChoice, Reservation, Resource, UsageEvent
+from NEMO.models import Alert, LandingPageChoice, Reservation, Resource, UsageEvent, AreaAccessRecord
 from NEMO.views.alerts import delete_expired_alerts
 from NEMO.views.area_access import able_to_self_log_in_to_area, able_to_self_log_out_of_area
 from NEMO.views.notifications import delete_expired_notifications, get_notification_counts
@@ -46,6 +46,10 @@ def landing(request):
 		'self_log_in': able_to_self_log_in_to_area(request.user),
 		'self_log_out': able_to_self_log_out_of_area(request.user),
 	}
+	if request.user.in_area():
+		occupants = AreaAccessRecord.objects.filter(area__name=request.user.area_access_record().area, end=None, staff_charge=None).count()
+		dictionary['occupants'] = occupants
+
 	return render(request, 'landing.html', dictionary)
 
 

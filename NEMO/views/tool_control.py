@@ -16,9 +16,10 @@ from django.views.decorators.http import require_GET, require_POST
 from NEMO import rates
 from NEMO.forms import CommentForm, nice_errors
 from NEMO.models import Comment, Configuration, ConfigurationHistory, Project, Reservation, StaffCharge, Task, TaskCategory, TaskStatus, Tool, UsageEvent, User
-from NEMO.utilities import quiet_int, extract_times
-from NEMO.views.policy import check_policy_to_enable_tool, check_policy_to_disable_tool
+from NEMO.utilities import extract_times, quiet_int
+from NEMO.views.policy import check_policy_to_disable_tool, check_policy_to_enable_tool
 from NEMO.views.customization import get_customization
+from NEMO.widgets.configuration_editor import ConfigurationEditor
 from NEMO.widgets.dynamic_form import DynamicForm
 from NEMO.widgets.tool_tree import ToolTree
 
@@ -27,7 +28,7 @@ tool_control_logger = getLogger(__name__)
 @login_required
 @require_GET
 def tool_control(request, tool_id=None):
-	""" Presents the tool control view to the user, allowing them to being/end using a tool or see who else is using it. """
+	""" Presents the tool control view to the user, allowing them to begin/end using a tool or see who else is using it. """
 	if request.user.active_project_count() == 0:
 		return render(request, 'no_project.html')
 	# The tool-choice sidebar is not available for mobile devices, so redirect the user to choose a tool to view.
@@ -61,7 +62,8 @@ def tool_status(request, tool_id):
 		'mobile': request.device == 'mobile',
 		'task_statuses': TaskStatus.objects.exclude(name="default"),
 		'post_usage_questions': DynamicForm(tool.post_usage_questions).render(),
-		'active_projects_filtered': request.user.active_projects().exclude(id__in=projects_to_exclude)
+		'active_projects_filtered': request.user.active_projects().exclude(id__in=projects_to_exclude),
+		'configs': get_tool_full_config_history(tool),
 	}
 
 	try:
@@ -93,6 +95,31 @@ def use_tool_for_other(request):
 	}
 	return render(request, 'tool_control/use_tool_for_other.html', dictionary)
 
+
+def get_tool_full_config_history(tool: Tool):
+	# tool config by user and tool and time
+	configs = []
+	config_history = ConfigurationHistory.objects.filter(configuration__tool_id=tool.id).order_by('-modification_time')[:20]
+	configurations = tool.current_ordered_configurations()
+	for c in config_history:
+		for co in configurations:
+			if co == c.configuration:
+				current_settings = co.current_settings_as_list()
+				current_settings[c.slot] = c.setting
+				co.current_settings = ', '.join(current_settings)
+		config_input = {
+			'configurations': configurations,
+			'render_as_form': False,
+		}
+		configuration = ConfigurationEditor()
+		configs.append(
+			{
+				'modification_time': c.modification_time,
+				'user': c.user,
+				'html': configuration.render(None, config_input),
+			}
+		)
+	return configs
 
 @login_required
 @require_POST
@@ -257,14 +284,23 @@ def disable_tool(request, tool_id):
 @login_required
 @require_GET
 def past_comments_and_tasks(request):
-	try:
-		start, end = extract_times(request.GET)
-	except:
-		return HttpResponseBadRequest('Please enter a start and end date.')
+	start, end = extract_times(request.GET, start_required=False, end_required=False)
+	search = request.GET.get('search')
+	if not start and not end and not search:
+		return HttpResponseBadRequest('Please enter a search keyword, start date or end date.')
 	tool_id = request.GET.get('tool_id')
 	try:
-		tasks = Task.objects.filter(tool_id=tool_id, creation_time__gt=start, creation_time__lt=end)
-		comments = Comment.objects.filter(tool_id=tool_id, creation_date__gt=start, creation_date__lt=end)
+		tasks = Task.objects.filter(tool_id=tool_id)
+		comments = Comment.objects.filter(tool_id=tool_id, staff_only=False)
+		if start:
+			tasks = tasks.filter(creation_time__gt=start)
+			comments = comments.filter(creation_date__gt=start)
+		if end:
+			tasks = tasks.filter(creation_time__lt=end)
+			comments = comments.filter(creation_date__lt=end)
+		if search:
+			tasks = tasks.filter(problem_description__icontains=search)
+			comments = comments.filter(content__icontains=search)
 	except:
 		return HttpResponseBadRequest('Task and comment lookup failed.')
 	past = list(chain(tasks, comments))
@@ -280,7 +316,7 @@ def past_comments_and_tasks(request):
 @require_GET
 def ten_most_recent_past_comments_and_tasks(request, tool_id):
 	tasks = Task.objects.filter(tool_id=tool_id).order_by('-creation_time')[:10]
-	comments = Comment.objects.filter(tool_id=tool_id).order_by('-creation_date')[:10]
+	comments = Comment.objects.filter(tool_id=tool_id, staff_only=False).order_by('-creation_date')[:10]
 	past = list(chain(tasks, comments))
 	past.sort(key=lambda x: getattr(x, 'creation_time', None) or getattr(x, 'creation_date', None))
 	past.reverse()

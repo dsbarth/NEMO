@@ -126,7 +126,7 @@ class ToolAdminForm(forms.ModelForm):
 
 @register(Tool)
 class ToolAdmin(admin.ModelAdmin):
-	list_display = ('name_display', '_category', 'visible', 'operational_display', 'problematic', 'is_configurable')
+	list_display = ('name_display', 'id', '_category', 'visible', 'operational_display', 'problematic', 'is_configurable')
 	search_fields = ('name', '_description', '_serial')
 	list_filter = ('visible', '_operational', '_category', '_location')
 	actions = [duplicate_tool_configuration]
@@ -340,8 +340,23 @@ class InterlockCardAdmin(admin.ModelAdmin):
 	list_display = ('name', 'server', 'port', 'number', 'category', 'even_port', 'odd_port')
 
 
+class InterlockAdminForm(forms.ModelForm):
+	class Meta:
+		model = Interlock
+		fields = '__all__'
+
+	def clean(self):
+		if any(self.errors):
+			return
+		super(InterlockAdminForm, self).clean()
+		from NEMO import interlocks
+		category = self.cleaned_data['card'].category
+		interlocks.get(category, False).clean_interlock(self)
+
+
 @register(Interlock)
 class InterlockAdmin(admin.ModelAdmin):
+	form = InterlockAdminForm
 	list_display = ('id', 'card', 'channel', 'state', 'tool', 'door')
 	actions = [lock_selected_interlocks, unlock_selected_interlocks, synchronize_with_tool_usage]
 	readonly_fields = ['state', 'most_recent_reply']
@@ -388,8 +403,8 @@ class TaskImagesAdmin(admin.ModelAdmin):
 
 @register(Comment)
 class CommentAdmin(admin.ModelAdmin):
-	list_display = ('id', 'tool', 'author', 'creation_date', 'expiration_date', 'visible', 'hidden_by', 'hide_date')
-	list_filter = ('visible', 'creation_date', 'tool')
+	list_display = ('id', 'tool', 'author', 'creation_date', 'expiration_date', 'visible', 'staff_only', 'hidden_by', 'hide_date')
+	list_filter = ('visible', 'creation_date', 'tool', 'staff_only')
 	date_hierarchy = 'creation_date'
 	search_fields = ('content',)
 

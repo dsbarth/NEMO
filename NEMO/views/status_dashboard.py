@@ -70,6 +70,7 @@ def merge(tools, tasks, unavailable_resources, usage_events, scheduled_outages, 
 			'nonrequired_resource_is_unavailable': False,
 			'scheduled_outage': False,
 			'user_qualified': tool.id in user_qualified_on_tool,
+			'scheduled_partial_outage': False,
 		}
 	for task in tasks:
 		result[task.tool.id]['problematic'] = True
@@ -91,6 +92,8 @@ def merge(tools, tasks, unavailable_resources, usage_events, scheduled_outages, 
 		elif outage.resource_id:
 			for t in outage.resource.fully_dependent_tools.filter(visible=True):
 				result[t.id]['scheduled_outage'] = True
+			for t in outage.resource.partially_dependent_tools.filter(visible=True):
+				result[t.id]['scheduled_partial_outage'] = True
 	return result
 
 

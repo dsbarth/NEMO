@@ -13,7 +13,7 @@ from django.contrib.staticfiles.storage import staticfiles_storage
 from django.contrib.staticfiles.urls import staticfiles_urlpatterns
 from django.views.generic.base import RedirectView
 
-from NEMO.views import abuse, accounts_and_projects, alerts, api, area_access, authentication, calendar, configuration_agenda, consumables, contact_staff, customization, directory, email, feedback, get_projects, history, jumbotron, landing, maintenance, mobile, usage, news, qualifications, remote_work, resources, safety, sensors, sidebar, staff_charges, status_dashboard, stockroom, tasks, tool_control, training, tutorials, users, user_chemicals, forgot_password, billing, consultation
+from NEMO.views import abuse, accounts_and_projects, alerts, api, area_access, authentication, calendar, configuration_agenda, consumables, contact_staff, customization, directory, email, feedback, get_projects, history, intercom, jumbotron, landing, maintenance, mobile, usage, news, qualifications, remote_work, resources, safety, sensors, sidebar, staff_charges, status_dashboard, stockroom, tasks, tool_control, training, tutorials, users, user_chemicals, forgot_password, billing, consultation
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +53,7 @@ urlpatterns = [
 			permanent=False),
 		name="favicon"
 	),
+	url(r'^authorization_failed/$', authentication.authorization_failed, name='authorization_failed'),
 
 	# Root URL defaults to the calendar page on desktop systems, and the mobile homepage for mobile devices:
 	url(r'^$', landing.landing, name='landing'),
@@ -95,6 +96,7 @@ urlpatterns = [
 	url(r'^cancel_reservation/(?P<reservation_id>\d+)/$', calendar.cancel_reservation, name='cancel_reservation'),
 	url(r'^cancel_outage/(?P<outage_id>\d+)/$', calendar.cancel_outage, name='cancel_outage'),
 	url(r'^set_reservation_title/(?P<reservation_id>\d+)/$', calendar.set_reservation_title, name='set_reservation_title'),
+	url(r'^change_reservation_project/(?P<reservation_id>\d+)/$', calendar.change_reservation_project, name='change_reservation_project'),
 	url(r'^event_details/reservation/(?P<reservation_id>\d+)/$', calendar.reservation_details, name='reservation_details'),
 	url(r'^event_details/outage/(?P<outage_id>\d+)/$', calendar.outage_details, name='outage_details'),
 	url(r'^event_details/usage/(?P<event_id>\d+)/$', calendar.usage_details, name='usage_details'),
@@ -144,6 +146,8 @@ urlpatterns = [
 	url(r'^email_broadcast/(?P<audience>tool|account|project|all)/$', email.email_broadcast, name='email_broadcast'),
 	url(r'^compose_email/$', email.compose_email, name='compose_email'),
 	url(r'^send_broadcast_email/$', email.send_broadcast_email, name='send_broadcast_email'),
+
+	url(r'^scheduled_announcement/(?P<area_id>\d+)/$', intercom.scheduled_announcement, name='scheduled_announcement'),
 
 	# Maintenance:
 	url(r'^maintenance/(?P<sort_by>urgency|force_shutdown|tool|problem_category|last_updated|creation_time)/$', maintenance.maintenance, name='maintenance'),
@@ -205,6 +209,7 @@ urlpatterns = [
 	# NanoFab usage:
 	url(r'^usage/$', usage.usage, name='usage'),
 	url(r'^usage_billing/$', usage.billing, name='usage_billing'),
+	url(r'^usage_xlsx/$', usage.usagexlsx, name='usage_xlsx'),
 
 	# Alerts:
 	url(r'^alerts/$', alerts.alerts, name='alerts'),
@@ -289,7 +294,7 @@ if settings.ALLOW_CONDITIONAL_URLS:
 		url(r'^customize/(?P<element>.+)/$', customization.customize, name='customize'),
 
 		# Project Usage:
-		url(r'^project_usage/$', usage.project_usage, name='project_usage'),
+		url(r'^usage_reports/$', usage.project_usage, name='project_usage'),
 		url(r'^project_billing/$', usage.project_billing, name='project_billing'),
 
 		# NanoFab billing:
@@ -314,6 +319,9 @@ for app in apps.get_app_configs():
 
 
 if settings.DEBUG:
+	urlpatterns += [
+		url(r'^intercom/$', intercom.test_announcement, name='intercom'),
+	]
 	# Static files
 	url(r'^static/(?P<path>.*$)', serve, {'document_root': settings.STATIC_ROOT}, name='static'),
 	#url(r'^media/(?P<path>.*$)', serve, {'document_root': settings.MEDIA_ROOT}, name='media'),

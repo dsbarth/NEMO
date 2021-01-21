@@ -5,7 +5,7 @@ from http import HTTPStatus
 from re import match
 from pandas import DataFrame, to_numeric
 from dateutil import relativedelta
-from typing import Union
+from typing import Union, List, Set
 
 from dateutil import rrule
 from django.contrib.admin.views.decorators import staff_member_required
@@ -58,11 +58,24 @@ def calendar(request, tool_id=None):
 	tools = Tool.objects.filter(visible=True).order_by('_category', 'name')
 	rendered_tool_tree_html = ToolTree().render(None, {'tools': tools, 'user': request.user})
 	tool_summary = create_tool_summary(request)
+
+	# default value for calendar_view is 'agendaWeek'
+	calendar_view = get_customization('calendar_view')
+	if not calendar_view:
+		calendar_view = 'agendaWeek'
+
+	# default value for calendar_first_day_of_week is 1 (Monday)
+	calendar_first_day_of_week = get_customization('calendar_first_day_of_week')
+	if not calendar_first_day_of_week:
+		calendar_first_day_of_week = 1
+
 	dictionary = {
 		'rendered_tool_tree_html': rendered_tool_tree_html,
 		'tools': tools,
 		'auto_select_tool': tool_id,
 		'tool_summary': tool_summary,
+		'calendar_view' : calendar_view,
+		'calendar_first_day_of_week' : calendar_first_day_of_week,
 	}
 	if request.user.is_staff:
 		dictionary['users'] = User.objects.all()
@@ -91,6 +104,8 @@ def event_feed(request):
 		return reservation_event_feed(request, start, end)
 	elif event_type == 'usage':
 		return usage_event_feed(request, start, end)
+	elif event_type == 'buddy view':
+		return buddy_event_feed(request, start, end)
 	# Only staff may request a specific user's history...
 	elif event_type == 'specific user' and request.user.is_staff:
 		user = get_object_or_404(User, id=request.GET.get('user'))
@@ -127,6 +142,21 @@ def reservation_event_feed(request, start, end):
 		'events': events,
 		'outages': outages,
 		'personal_schedule': personal_schedule,
+	}
+	return render(request, 'calendar/reservation_event_feed.html', dictionary)
+
+def buddy_event_feed(request, start, end):
+	events = Reservation.objects.filter(cancelled=False, missed=False, shortened=False)
+
+	# Exclude events for which the following is true:
+	# The event starts and ends before the time-window, and...
+	# The event starts and ends after the time-window.
+	events = events.exclude(start__lt=start, end__lt=start)
+	events = events.exclude(start__gt=end, end__gt=end)
+
+
+	dictionary = {
+		'events': events,
 	}
 	return render(request, 'calendar/reservation_event_feed.html', dictionary)
 
@@ -244,29 +274,27 @@ def create_reservation(request):
 
 	# If the user only has one project then associate it with the reservation.
 	# Otherwise, present a dialog box for the user to choose which project to associate.
-	exclude=get_customization('exclude_from_usage')
-	projects_to_exclude=[]
-	if exclude:
-		projects_to_exclude = [int(s) for s in exclude.split() if s.isdigit()]
-	active_projects = user.active_projects().exclude(id__in=projects_to_exclude)
-	if len(active_projects) == 1:
-		new_reservation.project = active_projects[0]
-	else:
-		try:
-			new_reservation.project = Project.objects.get(id=request.POST['project_id'])
-		except:
+	if not user.is_staff:
+		exclude=get_customization('exclude_from_usage')
+		projects_to_exclude=[]
+		if exclude:
+			projects_to_exclude = [int(s) for s in exclude.split() if s.isdigit()]
+		active_projects = user.active_projects().exclude(id__in=projects_to_exclude)
+		if len(active_projects) == 1:
+			new_reservation.project = active_projects[0]
+		else:
+			try:
+				new_reservation.project = Project.objects.get(id=request.POST['project_id'])
+			except:
+				return render(request, 'calendar/project_choice.html', {'active_projects': active_projects})
+		if new_reservation.project not in new_reservation.user.active_projects().exclude(id__in=projects_to_exclude):
 			return render(request, 'calendar/project_choice.html', {'active_projects': active_projects})
-
-	# Make sure the user is actually enrolled on the project. We wouldn't want someone
-	# forging a request to reserve against a project they don't belong to.
-	if new_reservation.project not in new_reservation.user.active_projects():
-		return render(request, 'calendar/project_choice.html', {'active_projects': active_projects})
 
 	configured = (request.POST.get('configured') == "true")
 	# If a reservation is requested and the tool does not require configuration...
 	if not tool.is_configurable():
 		new_reservation.save_and_notify()
-		return HttpResponse()
+		return reservation_success(request, new_reservation)
 
 	# If a reservation is requested and the tool requires configuration that has not been submitted...
 	elif tool.is_configurable() and not configured:
@@ -280,9 +308,71 @@ def create_reservation(request):
 		if new_reservation.self_configuration:
 			new_reservation.short_notice = False
 		new_reservation.save_and_notify()
-		return HttpResponse()
+		return reservation_success(request, new_reservation)
 
 	return HttpResponseBadRequest("Reservation creation failed because invalid parameters were sent to the server.")
+
+
+def reservation_success(request, reservation: Reservation):
+	""" Checks area capacity and display warning message if capacity is high """
+	reservations_in_same_area, reservations_in_same_location = ([], [])
+	max_area_overlap, max_location_overlap = (0,0)
+	max_area_time, max_location_time = (None, None)
+	area = reservation.tool.requires_area_access
+	location = reservation.tool.location
+	if area and area.reservation_warning:
+		reservations_in_same_area = Reservation.objects.filter(cancelled=False, end__gte=reservation.start, start__lte=reservation.end, tool__in=Tool.objects.filter(_requires_area_access=area))
+		max_area_overlap, max_area_time = maximum_overlap(reservations_in_same_area)
+		if reservation.tool.location:
+			reservations_in_same_location = reservations_in_same_area.filter(tool__in=Tool.objects.filter(_location=location))
+			max_location_overlap, max_location_time = maximum_overlap(reservations_in_same_location)
+	if max_area_overlap and max_area_overlap >= area.warning_capacity():
+		dictionary = {
+			'same_area_count': len(reservations_in_same_area)-1,
+			'same_location_count': len(reservations_in_same_location)-1,
+			'area': area,
+			'location': location,
+			'max_area_count': max_area_overlap-1,
+			'max_location_count': max_location_overlap-1,
+			'max_area_time': max(max_area_time, reservation.start),
+			'max_location_time': max(max_location_time, reservation.start),
+		}
+		return render(request, 'calendar/reservation_warning.html', dictionary, status=201) # send 201 code CREATED to indicate success but with more information to come
+	if area:
+		if area.buddy_required(reservation.start) or area.buddy_required(reservation.end):
+			reservations_in_same_area = len(set(Reservation.objects.filter(cancelled=False, end__gte=reservation.start, start__lte=reservation.end, tool__in=Tool.objects.filter(_requires_area_access=area)).values_list('user')))
+			if reservations_in_same_area <= 3:
+				dictionary = {
+					'same_area_count': reservations_in_same_area-1,
+					'area': area,
+				}
+				return render(request, 'calendar/reservation_buddy_warning.html', dictionary, status=201) # send 201 code CREATED to indicate success but with more information to come
+	return HttpResponse()
+
+
+def maximum_overlap(reservations: List[Reservation]) -> (int, datetime):
+	""" Returns the maximum number of overlapping reservations and the earlier time the maximum is reached """
+	times = []
+	for reservation in reservations:
+		startTime, endTime = reservation.start, reservation.end
+		times.append((startTime, 'start'))
+		times.append((endTime, 'end'))
+	times = sorted(times)
+
+	count = 0
+	max_count = 0
+	max_time = None
+	for time in times:
+		if time[1] == 'start':
+			count += 1  # increment on arrival/start
+		else:
+			count -= 1  # decrement on departure/end
+		# maintain maximum
+		max_count = max(count, max_count)
+		# maintain earlier time max is reached
+		if max_count == count:
+			max_time = time[0]
+	return max_count, max_time
 
 
 def extract_configuration(request):
@@ -475,7 +565,7 @@ def modify_reservation(request, start_delta, end_delta):
 		new_reservation.save_and_notify()
 		reservation_to_cancel.descendant = new_reservation
 		reservation_to_cancel.save_and_notify()
-	return response
+	return reservation_success(request, new_reservation)
 
 
 def modify_outage(request, start_delta, end_delta):
@@ -542,6 +632,23 @@ def set_reservation_title(request, reservation_id):
 	reservation = get_object_or_404(Reservation, id=reservation_id)
 	reservation.title = request.POST.get('title', '')[:reservation._meta.get_field('title').max_length]
 	reservation.save()
+	return HttpResponse()
+
+
+@login_required
+@require_POST
+def change_reservation_project(request, reservation_id):
+	""" Change reservation project for a user. """
+	exclude=get_customization('exclude_from_usage')
+	projects_to_exclude=[]
+	if exclude:
+		projects_to_exclude = [int(s) for s in exclude.split() if s.isdigit()]
+	reservation = get_object_or_404(Reservation, id=reservation_id)
+	active_projects = reservation.user.active_projects().exclude(id__in=projects_to_exclude)
+	project = get_object_or_404(Project, id=request.POST['project_id'])
+	if (request.user.is_staff or request.user == reservation.user) and reservation.has_not_ended() and reservation.has_not_started() and  project in active_projects:
+		reservation.project = project
+		reservation.save()
 	return HttpResponse()
 
 
@@ -802,7 +909,13 @@ def reservation_details(request, reservation_id):
 	if reservation.cancelled:
 		error_message = 'This reservation was cancelled by {0} at {1}.'.format(reservation.cancelled_by, format_datetime(reservation.cancellation_time))
 		return HttpResponseNotFound(error_message)
-	return render(request, 'calendar/reservation_details.html', {'reservation': reservation})
+	exclude=get_customization('exclude_from_usage')
+	projects_to_exclude=[]
+	if exclude:
+		projects_to_exclude = [int(s) for s in exclude.split() if s.isdigit()]
+	active_projects = reservation.user.active_projects().exclude(id__in=projects_to_exclude)
+	reservation_project_can_be_changed = (request.user.is_staff or request.user == reservation.user) and reservation.has_not_ended and reservation.has_not_started and reservation.user.active_project_count() > 1
+	return render(request, 'calendar/reservation_details.html', {'reservation': reservation, 'reservation_project_can_be_changed': reservation_project_can_be_changed, 'active_projects': active_projects})
 
 
 @login_required
